@@ -1,0 +1,10 @@
+streamlit
+sqlalchemy
+pandas
+plotly
+bcrypt
+reportlab
+PyPDF2
+Pillow
+pytesseract
+pytest
