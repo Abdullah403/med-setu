@@ -186,7 +186,7 @@ def show_login_page(db):
         st.caption("Click any role to auto-sign in for live demonstration.")
 
         st.markdown("##### 🏥 Hospital A: Rural Community Health Centre (Thane)")
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("Receptionist A\n(Front Desk & Queue)", use_container_width=True):
                 auth = AuthService.authenticate(db, "receptionist", "password123")
@@ -205,11 +205,20 @@ def show_login_page(db):
                 else:
                     st.error("Demo account unavailable. Please check seed data.")
             st.caption("User: `drkhan` | Pass: `password123`")
+        with c3:
+            if st.button("Dr. Priya Sharma\n(Dental)", use_container_width=True):
+                auth = AuthService.authenticate(db, "drsharma", "password123")
+                if auth:
+                    _establish_session(auth_result=auth)
+                    st.rerun()
+                else:
+                    st.error("Demo account unavailable. Please check seed data.")
+            st.caption("User: `drsharma` | Pass: `password123`")
 
         st.markdown("---")
         st.markdown("##### 🏥 Hospital B: District General Hospital (Pune — Receiving Facility)")
-        c3, c4 = st.columns(2)
-        with c3:
+        c4, c5 = st.columns(2)
+        with c4:
             if st.button("Receptionist B\n(Referral Desk)", use_container_width=True):
                 auth = AuthService.authenticate(db, "receptionist_b", "password123")
                 if auth:
@@ -219,7 +228,7 @@ def show_login_page(db):
                 else:
                     st.error("Demo account unavailable. Please check seed data.")
             st.caption("User: `receptionist_b` | Pass: `password123`")
-        with c4:
+        with c5:
             if st.button("Dr. Anil Gupta\n(Cardiology Specialist)", use_container_width=True):
                 auth = AuthService.authenticate(db, "drgupta", "password123")
                 if auth:

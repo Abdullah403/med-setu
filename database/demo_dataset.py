@@ -101,7 +101,6 @@ def reset_and_seed_demo_dataset(
 
         # Doctors
         doc_khan = db.query(Doctor).filter(Doctor.doctor_id == "DOC-001").first()
-        doc_sharma = db.query(Doctor).filter(Doctor.doctor_id == "DOC-002").first()
         doc_gupta = db.query(Doctor).filter(Doctor.doctor_id == "DOC-003").first()
         doc_verma = db.query(Doctor).filter(Doctor.doctor_id == "DOC-004").first()
 
