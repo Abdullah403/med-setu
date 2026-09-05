@@ -119,8 +119,8 @@ class PatientService:
     def deactivate_patient(db: Session, patient_id: int, user_role: str = "receptionist"):
         """Deactivate a patient (soft delete). Prevents accidental visit creation."""
         user_role_clean = str(user_role).lower().split(".")[-1]
-        if user_role_clean == "doctor":
-            return {"success": False, "error": "Unauthorized: Doctors cannot deactivate patients."}
+        if user_role_clean in ("doctor", "patient"):
+            return {"success": False, "error": "Unauthorized: Doctors and patients cannot deactivate patient records."}
         
         patient = db.query(Patient).filter(Patient.id == patient_id).first()
         if not patient:
@@ -134,8 +134,8 @@ class PatientService:
     def reactivate_patient(db: Session, patient_id: int, user_role: str = "receptionist"):
         """Reactivate a previously deactivated patient."""
         user_role_clean = str(user_role).lower().split(".")[-1]
-        if user_role_clean == "doctor":
-            return {"success": False, "error": "Unauthorized: Doctors cannot reactivate patients."}
+        if user_role_clean in ("doctor", "patient"):
+            return {"success": False, "error": "Unauthorized: Doctors and patients cannot reactivate patient records."}
         
         patient = db.query(Patient).filter(Patient.id == patient_id).first()
         if not patient:
@@ -158,8 +158,8 @@ class PatientService:
     ):
         """Edit basic demographics of an existing patient."""
         user_role_clean = str(user_role).lower().split(".")[-1]
-        if user_role_clean == "doctor":
-            return {"success": False, "error": "Unauthorized: Doctors cannot edit patient demographics."}
+        if user_role_clean in ("doctor", "patient"):
+            return {"success": False, "error": "Unauthorized: Doctors and patients cannot edit patient demographics."}
         
         patient = db.query(Patient).filter(Patient.id == patient_id).first()
         if not patient:
@@ -195,11 +195,11 @@ class PatientService:
         """
         user_role_clean = str(user_role).lower().split(".")[-1]
         
-        # Security: DOCTORS are strictly forbidden
-        if user_role_clean == "doctor":
+        # Security: DOCTORS and PATIENTS are strictly forbidden
+        if user_role_clean in ("doctor", "patient"):
             return {
                 "success": False,
-                "error": "Unauthorized: Doctors are not permitted to delete patient records."
+                "error": "Unauthorized: Doctors and patients are not permitted to delete patient records."
             }
         
         # Security: Normal staff without administrative privileges cannot permanently delete

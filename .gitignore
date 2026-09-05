@@ -19,6 +19,10 @@ htmlcov/
 .env.*
 .streamlit/secrets.toml
 
+# Runtime / user-uploaded files (preserve directory via .gitkeep)
+uploads/*
+!uploads/.gitkeep
+
 # OS & Editor files
 .DS_Store
 Thumbs.db

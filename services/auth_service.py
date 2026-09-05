@@ -31,6 +31,16 @@ class AuthService:
         except Exception:
             return None
 
+        return AuthService.build_user_payload(db, user)
+
+    @staticmethod
+    def build_user_payload(db: Session, user: User) -> Dict[str, Any]:
+        """Build the full session user-info dict for an authenticated User row.
+
+        Used on login and when re-validating an existing session so the cached
+        copy of authenticated user data always matches database state.
+        Contains NO password or credential material.
+        """
         if isinstance(user.role, UserRole):
             role_str = user.role.value.lower()
         else:

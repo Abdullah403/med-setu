@@ -2,6 +2,7 @@
 from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 from database.models import User, Doctor, Facility, Visit, Patient
+from services.session_service import is_role_allowed, ADMIN_LIKE_ROLES, denial
 
 
 class ManagementService:
@@ -32,9 +33,8 @@ class ManagementService:
     @staticmethod
     def deactivate_staff(db: Session, user_id: int, requester_role: str = "hospital_admin") -> Dict[str, Any]:
         """Deactivate a staff account. Doctor records and historical visits remain intact."""
-        role_clean = str(requester_role).lower().split(".")[-1]
-        if role_clean == "doctor":
-            return {"success": False, "error": "Unauthorized: Doctors cannot deactivate staff."}
+        if not is_role_allowed(requester_role, ADMIN_LIKE_ROLES):
+            return denial("Unauthorized: Staff account management requires an administrative role.")
 
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -49,9 +49,8 @@ class ManagementService:
     @staticmethod
     def reactivate_staff(db: Session, user_id: int, requester_role: str = "hospital_admin") -> Dict[str, Any]:
         """Reactivate a previously deactivated staff account."""
-        role_clean = str(requester_role).lower().split(".")[-1]
-        if role_clean == "doctor":
-            return {"success": False, "error": "Unauthorized: Doctors cannot reactivate staff."}
+        if not is_role_allowed(requester_role, ADMIN_LIKE_ROLES):
+            return denial("Unauthorized: Staff account management requires an administrative role.")
 
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -85,9 +84,8 @@ class ManagementService:
     @staticmethod
     def deactivate_facility(db: Session, facility_id: int, requester_role: str = "hospital_admin") -> Dict[str, Any]:
         """Deactivate a facility. Historical visits and referrals are safely preserved."""
-        role_clean = str(requester_role).lower().split(".")[-1]
-        if role_clean == "doctor":
-            return {"success": False, "error": "Unauthorized: Doctors cannot deactivate facilities."}
+        if not is_role_allowed(requester_role, ADMIN_LIKE_ROLES):
+            return denial("Unauthorized: Facility management requires an administrative role.")
 
         fac = db.query(Facility).filter(Facility.id == facility_id).first()
         if not fac:
@@ -100,9 +98,8 @@ class ManagementService:
     @staticmethod
     def reactivate_facility(db: Session, facility_id: int, requester_role: str = "hospital_admin") -> Dict[str, Any]:
         """Reactivate a previously deactivated facility."""
-        role_clean = str(requester_role).lower().split(".")[-1]
-        if role_clean == "doctor":
-            return {"success": False, "error": "Unauthorized: Doctors cannot reactivate facilities."}
+        if not is_role_allowed(requester_role, ADMIN_LIKE_ROLES):
+            return denial("Unauthorized: Facility management requires an administrative role.")
 
         fac = db.query(Facility).filter(Facility.id == facility_id).first()
         if not fac:

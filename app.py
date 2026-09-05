@@ -26,6 +26,8 @@ from services.followup_service import FollowUpService
 from services.referral_service import ReferralService
 from services.patient_history_service import PatientHistoryService
 from services.management_service import ManagementService
+from services.session_service import AuthSessionService, normalize_role
+from services.navigation import DOCTOR_WORKFLOW, RECEPTIONIST_WORKFLOW, trail_text_with_current
 from services.ui_helpers import set_page_style
 
 # ==================== PAGE CONFIGURATION ====================
@@ -65,6 +67,70 @@ set_page_style()
 init_db()
 
 
+# ==================== SESSION LIFECYCLE HELPERS ====================
+
+def _establish_session(auth_result: dict = None, *, role: str = "", patient_portal_id=None):
+    """Persist a login in session_state and attach a refresh-survival URL token.
+
+    Used by every login path (staff form, demo quick-sign-in buttons, and the
+    patient simulator) so they all behave identically.
+    """
+    if auth_result is not None:
+        st.session_state.logged_in = True
+        st.session_state.user_role = auth_result["role"]
+        st.session_state.user_data = auth_result
+        AuthSessionService.attach_token(auth_result.get("user_id"), auth_result["role"])
+        _set_clean_nav(auth_result["role"])
+    elif role == "patient":
+        st.session_state.logged_in = True
+        st.session_state.user_role = "patient"
+        st.session_state.user_data = None
+        st.session_state.patient_portal_id = patient_portal_id
+        AuthSessionService.attach_token(None, "patient", patient_portal_id=patient_portal_id)
+        _set_clean_nav("patient")
+
+
+def _set_clean_nav(role: str):
+    """Set the role-appropriate landing tab after a fresh login."""
+    role_clean = normalize_role(role)
+    if role_clean == "receptionist":
+        st.session_state.receptionist_nav = "Dashboard"
+    elif role_clean == "doctor":
+        st.session_state.doctor_nav = "My Queue"
+
+
+def _render_workflow_trail(workflow, step_key: str):
+    """Show the canonical workflow path with the current step emphasized.
+
+    Read-only breadcrumb (no widget interaction, no fake browser navigation):
+    it simply states where the current screen sits in the role's workflow.
+    """
+    trail = trail_text_with_current(workflow, step_key)
+    if trail:
+        st.caption(f"🧭 Workflow: {trail}")
+    else:
+        st.caption(f"🧭 Workflow: **{step_key}**")
+
+
+def _safe_render(step_name: str, render_fn, *args):
+    """Render a screen with user-friendly error handling.
+
+    Unexpected exceptions are logged to stderr for debugging but surfaced to
+    the user as a clean message instead of a raw stack trace. Session state is
+    preserved so the user can retry without being logged out.
+    """
+    import traceback
+    try:
+        render_fn(*args)
+    except Exception as exc:  # noqa: BLE001 - intentional catch-all barrier
+        traceback.print_exc()
+        st.error(
+            f"⚠️ **Something went wrong while loading the {step_name} screen.**\n\n"
+            "Your session is safe and your data was not lost — please try the action again "
+            "or refresh the page."
+        )
+
+
 # ==================== AUTHENTICATION & LOGIN ====================
 
 def show_login_page(db):
@@ -99,11 +165,7 @@ def show_login_page(db):
                 else:
                     auth_result = AuthService.authenticate(db, username_input.strip(), password_input.strip())
                     if auth_result:
-                        st.session_state.logged_in = True
-                        st.session_state.user_role = auth_result["role"]
-                        st.session_state.user_data = auth_result
-                        st.session_state.receptionist_nav = "Dashboard"
-                        st.session_state.doctor_nav = "My Queue"
+                        _establish_session(auth_result=auth_result)
                         st.rerun()
                     else:
                         st.error("Invalid username or password. Please check demo credentials.")
@@ -112,12 +174,11 @@ def show_login_page(db):
         st.markdown("#### 📱 Patient Simulator Access")
         st.caption("Experience the patient's WhatsApp interface for symptom triage and referral updates.")
         if st.button("💬 Open Patient WhatsApp Simulator (Rahim Shaikh)", use_container_width=True):
-            st.session_state.logged_in = True
-            st.session_state.user_role = "patient"
+            st.session_state.patient_workflow_stage = "search"
             rahim = db.query(Patient).filter(Patient.patient_id == "PAT-00184").first()
             if not rahim:
                 rahim = db.query(Patient).first()
-            st.session_state.patient_portal_id = rahim.id if rahim else 1
+            _establish_session(role="patient", patient_portal_id=rahim.id if rahim else 1)
             st.rerun()
 
     with col_demo:
@@ -130,21 +191,19 @@ def show_login_page(db):
             if st.button("Receptionist A\n(Front Desk & Queue)", use_container_width=True):
                 auth = AuthService.authenticate(db, "receptionist", "password123")
                 if auth:
-                    st.session_state.logged_in = True
-                    st.session_state.user_role = auth["role"]
-                    st.session_state.user_data = auth
-                    st.session_state.receptionist_nav = "Dashboard"
+                    _establish_session(auth_result=auth)
                     st.rerun()
+                else:
+                    st.error("Demo account unavailable. Please check seed data.")
             st.caption("User: `receptionist` | Pass: `password123`")
         with c2:
             if st.button("Dr. Mohammad Khan\n(General Medicine)", use_container_width=True):
                 auth = AuthService.authenticate(db, "drkhan", "password123")
                 if auth:
-                    st.session_state.logged_in = True
-                    st.session_state.user_role = auth["role"]
-                    st.session_state.user_data = auth
-                    st.session_state.doctor_nav = "My Queue"
+                    _establish_session(auth_result=auth)
                     st.rerun()
+                else:
+                    st.error("Demo account unavailable. Please check seed data.")
             st.caption("User: `drkhan` | Pass: `password123`")
 
         st.markdown("---")
@@ -154,21 +213,20 @@ def show_login_page(db):
             if st.button("Receptionist B\n(Referral Desk)", use_container_width=True):
                 auth = AuthService.authenticate(db, "receptionist_b", "password123")
                 if auth:
-                    st.session_state.logged_in = True
-                    st.session_state.user_role = auth["role"]
-                    st.session_state.user_data = auth
+                    _establish_session(auth_result=auth)
                     st.session_state.receptionist_nav = "Referrals"
                     st.rerun()
+                else:
+                    st.error("Demo account unavailable. Please check seed data.")
             st.caption("User: `receptionist_b` | Pass: `password123`")
         with c4:
             if st.button("Dr. Anil Gupta\n(Cardiology Specialist)", use_container_width=True):
                 auth = AuthService.authenticate(db, "drgupta", "password123")
                 if auth:
-                    st.session_state.logged_in = True
-                    st.session_state.user_role = auth["role"]
-                    st.session_state.user_data = auth
-                    st.session_state.doctor_nav = "My Queue"
+                    _establish_session(auth_result=auth)
                     st.rerun()
+                else:
+                    st.error("Demo account unavailable. Please check seed data.")
             st.caption("User: `drgupta` | Pass: `password123`")
 
 
@@ -208,12 +266,17 @@ def render_receptionist_sidebar(facility_info: dict) -> str:
     else:
         clean_nav = "Dashboard"
 
+    # Dismiss one-shot confirmation state only when the user actively switches
+    # to a DIFFERENT sidebar section. The token confirmation card is a transient
+    # result of the "Visit / Token" step; once the receptionist leaves the
+    # Patients workflow it must not hijack the screen on their return. Selected
+    # patient/visit/referral context is deliberately preserved.
+    if st.session_state.get("receptionist_nav") != clean_nav:
+        st.session_state.pop("generated_token_id", None)
     st.session_state.receptionist_nav = clean_nav
 
     if st.sidebar.button("🚪 Logout", use_container_width=True, key="rec_logout_btn"):
-        st.session_state.logged_in = False
-        st.session_state.user_role = None
-        st.session_state.user_data = None
+        AuthSessionService.logout()
         st.rerun()
 
     st.sidebar.markdown("---")
@@ -247,6 +310,7 @@ def show_receptionist_overview(db, facility_info):
     """Dashboard view: KPIs and quick overview."""
     fac_name = facility_info.get("name", "Healthcare Facility") if facility_info else "Healthcare Facility"
     st.markdown(f"## 🏠 Front Desk Dashboard — {fac_name}")
+    _render_workflow_trail(RECEPTIONIST_WORKFLOW, "dashboard")
 
     kpis = DashboardService.get_kpi_counts(db)
     c1, c2, c3, c4 = st.columns(4)
@@ -265,11 +329,13 @@ def show_receptionist_overview(db, facility_info):
     c_btn1, c_btn2, c_btn3 = st.columns(3)
     with c_btn1:
         if st.button("➕ Register New Patient", use_container_width=True):
+            st.session_state.pop("generated_token_id", None)
             st.session_state.patient_workflow_stage = "register"
             st.session_state.receptionist_nav = "Patients"
             st.rerun()
     with c_btn2:
         if st.button("🔍 Search Patient / Create Visit", use_container_width=True):
+            st.session_state.pop("generated_token_id", None)
             st.session_state.patient_workflow_stage = "search"
             st.session_state.receptionist_nav = "Patients"
             st.rerun()
@@ -313,6 +379,7 @@ def show_receptionist_patients(db, facility_info):
         return
 
     # Primary mode selection: Search or Register
+    _render_workflow_trail(RECEPTIONIST_WORKFLOW, "patients")
     mode = st.radio(
         "Patient Action",
         ["🔍 Search Existing Patient", "➕ Register New Patient"],
@@ -361,7 +428,7 @@ def show_receptionist_patients(db, facility_info):
                             with btn_c3:
                                 if is_active:
                                     if st.button("⏸️ Deact", key=f"deact_btn_{p.id}", use_container_width=True, help="Deactivate Patient (Soft Archive)"):
-                                        res = PatientService.deactivate_patient(db, p.id, user_role="receptionist")
+                                        res = PatientService.deactivate_patient(db, p.id, user_role=normalize_role(st.session_state.get("user_role")) or "receptionist")
                                         if res["success"]:
                                             st.success(res["message"])
                                             st.rerun()
@@ -369,7 +436,7 @@ def show_receptionist_patients(db, facility_info):
                                             st.error(res["error"])
                                 else:
                                     if st.button("▶️ React", key=f"react_btn_{p.id}", use_container_width=True, help="Reactivate Patient"):
-                                        res = PatientService.reactivate_patient(db, p.id, user_role="receptionist")
+                                        res = PatientService.reactivate_patient(db, p.id, user_role=normalize_role(st.session_state.get("user_role")) or "receptionist")
                                         if res["success"]:
                                             st.success(res["message"])
                                             st.rerun()
@@ -402,7 +469,7 @@ def show_receptionist_patients(db, facility_info):
 
                                 if submit_edit:
                                     edit_res = PatientService.edit_patient(
-                                        db, p.id, edit_name, edit_age, edit_gender, edit_phone, edit_lang, user_role="receptionist"
+                                        db, p.id, edit_name, edit_age, edit_gender, edit_phone, edit_lang, user_role=normalize_role(st.session_state.get("user_role")) or "receptionist"
                                     )
                                     if edit_res["success"]:
                                         st.success(edit_res["message"])
@@ -442,7 +509,7 @@ def show_receptionist_patients(db, facility_info):
                                     elif admin_pass.strip() not in ["admin123", "admin", "hospital_admin", "password123"]:
                                         st.error("Unauthorized: Invalid administrator passkey. Permanent deletion is restricted. You can use Deactivate instead.")
                                     else:
-                                        del_res = PatientService.delete_patient(db, p.id, user_role="hospital_admin", confirmed=True)
+                                        del_res = PatientService.delete_patient(db, p.id, user_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", confirmed=True)
                                         if del_res["success"]:
                                             st.success(f"✓ {del_res['message']}")
                                             st.session_state[f"confirm_delete_{p.id}"] = False
@@ -532,14 +599,14 @@ def show_receptionist_patients(db, facility_info):
                 st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
                 if sel_staff and sel_staff["is_active"]:
                     if st.button("Deactivate Staff", key=f"deact_staff_{sel_staff['id']}", use_container_width=True):
-                        res = ManagementService.deactivate_staff(db, sel_staff["id"])
+                        res = ManagementService.deactivate_staff(db, sel_staff["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin")
                         st.success(res["message"])
                         st.rerun()
             with sc3:
                 st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
                 if sel_staff and not sel_staff["is_active"]:
                     if st.button("Reactivate Staff", key=f"react_staff_{sel_staff['id']}", use_container_width=True):
-                        res = ManagementService.reactivate_staff(db, sel_staff["id"])
+                        res = ManagementService.reactivate_staff(db, sel_staff["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin")
                         st.success(res["message"])
                         st.rerun()
 
@@ -557,14 +624,14 @@ def show_receptionist_patients(db, facility_info):
                 st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
                 if sel_fac and sel_fac["is_active"]:
                     if st.button("Deactivate Facility", key=f"deact_fac_{sel_fac['id']}", use_container_width=True):
-                        res = ManagementService.deactivate_facility(db, sel_fac["id"])
+                        res = ManagementService.deactivate_facility(db, sel_fac["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin")
                         st.success(res["message"])
                         st.rerun()
             with sc3:
                 st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
                 if sel_fac and not sel_fac["is_active"]:
                     if st.button("Reactivate Facility", key=f"react_fac_{sel_fac['id']}", use_container_width=True):
-                        res = ManagementService.reactivate_facility(db, sel_fac["id"])
+                        res = ManagementService.reactivate_facility(db, sel_fac["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin")
                         st.success(res["message"])
                         st.rerun()
 
@@ -587,7 +654,7 @@ def show_receptionist_patients(db, facility_info):
                     if admin_vis_pass.strip() not in ["admin123", "admin", "hospital_admin", "password123"]:
                         st.error("Unauthorized: Valid admin passkey required.")
                     else:
-                        v_res = VisitService.delete_visit(db, sel_vis["id"], user_role="hospital_admin", confirmed=True)
+                        v_res = VisitService.delete_visit(db, sel_vis["id"], user_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", confirmed=True)
                         if v_res["success"]:
                             st.success(v_res["message"])
                             st.rerun()
@@ -623,7 +690,7 @@ def show_receptionist_patients(db, facility_info):
                 elif reset_pass.strip() not in ["admin123", "admin", "hospital_admin", "password123"]:
                     st.error("Unauthorized: Valid administrator passkey required.")
                 else:
-                    res = ManagementService.reset_and_seed_demo_dataset(db, requester_role="hospital_admin", confirmed=True)
+                    res = ManagementService.reset_and_seed_demo_dataset(db, requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", confirmed=True)
                     if res["success"]:
                         st.session_state.selected_patient_id = None
                         st.session_state.selected_visit_id = None
@@ -664,6 +731,12 @@ def show_visit_creation_workflow(db, facility_info):
 
     st.markdown(f"### 🏥 Create Healthcare Visit for **{patient.full_name}**")
     st.markdown(f"**Patient ID:** `{patient.patient_id}` | Age: {patient.age} ({patient.gender}) | Phone: `{patient.phone}`")
+    _render_workflow_trail(RECEPTIONIST_WORKFLOW, "visit_token")
+    if st.button("← Back to Dashboard", use_container_width=False, key="btn_visit_dash_back"):
+        st.session_state.selected_patient_id = None
+        st.session_state.patient_workflow_stage = "search"
+        st.session_state.receptionist_nav = "Dashboard"
+        st.rerun()
     st.markdown("---")
 
     facility_id = facility_info.get("id") if facility_info else 1
@@ -672,6 +745,14 @@ def show_visit_creation_workflow(db, facility_info):
         departments = VisitService.get_departments(db)
 
     dept_names = [d.name for d in departments]
+    if not dept_names:
+        st.error("No departments are configured for this facility.")
+        if st.button("← Back to Dashboard", use_container_width=True, key="btn_vis_no_dept_back"):
+            st.session_state.receptionist_nav = "Dashboard"
+            st.session_state.patient_workflow_stage = "search"
+            st.session_state.selected_patient_id = None
+            st.rerun()
+        return
     selected_dept_name = st.selectbox("Select Clinical Department *", dept_names)
     selected_dept = next((d for d in departments if d.name == selected_dept_name), None)
 
@@ -726,6 +807,7 @@ def show_token_confirmation_card(db):
         return
 
     st.markdown("## ✓ Token Generated Successfully")
+    _render_workflow_trail(RECEPTIONIST_WORKFLOW, "visit_token")
 
     col_l, col_card, col_r = st.columns([1, 2, 1])
     with col_card:
@@ -768,11 +850,30 @@ def show_token_confirmation_card(db):
             st.session_state.receptionist_nav = "Queue"
             st.rerun()
 
+    c_back, c_home = st.columns(2)
+    with c_back:
+        if st.button("← Back to Patient Search", key="btn_token_back_search", use_container_width=True):
+            st.session_state.generated_token_id = None
+            st.session_state.selected_patient_id = None
+            st.session_state.selected_visit_id = None
+            st.session_state.patient_workflow_stage = "search"
+            st.session_state.receptionist_nav = "Patients"
+            st.rerun()
+    with c_home:
+        if st.button("🏠 Done & View Dashboard", use_container_width=True):
+            st.session_state.generated_token_id = None
+            st.session_state.selected_patient_id = None
+            st.session_state.selected_visit_id = None
+            st.session_state.patient_workflow_stage = "search"
+            st.session_state.receptionist_nav = "Dashboard"
+            st.rerun()
+
 
 def show_receptionist_queue(db, facility_info):
     """Interactive queue management: Call, mark with doctor, complete."""
     fac_name = facility_info.get("name", "Facility") if facility_info else "Facility"
     st.markdown(f"## 🎫 Live Patient Queue — {fac_name}")
+    _render_workflow_trail(RECEPTIONIST_WORKFLOW, "queue")
     st.caption("Manage patient queue transitions and token statuses in real time.")
 
     queue_data = DashboardService.get_queue_table_data(db)
@@ -850,6 +951,7 @@ def show_receptionist_referrals(db, facility_info):
     fac_name = facility_info.get("name", "Facility")
 
     st.markdown(f"## 🔄 Referral Desk — {fac_name}")
+    _render_workflow_trail(RECEPTIONIST_WORKFLOW, "referrals")
     st.caption("Secure inter-hospital referral intake, patient verification, and facility referral tracking.")
 
     tabs = st.tabs(["🔍 Verify Incoming Referral (Referral Desk)", "📤 Facility Outgoing Referrals"])
@@ -1012,10 +1114,7 @@ def render_doctor_sidebar(doc_info: dict) -> str:
     st.session_state.doctor_nav = clean_nav
 
     if st.sidebar.button("🚪 Logout", use_container_width=True, key="doc_logout_btn"):
-        st.session_state.logged_in = False
-        st.session_state.user_role = None
-        st.session_state.user_data = None
-        st.session_state.selected_token_id = None
+        AuthSessionService.logout()
         st.rerun()
 
     st.sidebar.markdown("---")
@@ -1062,6 +1161,7 @@ def show_doctor_dashboard(db):
 def show_doctor_my_queue(db, doctor_id: int, doc_info: dict):
     """Doctor's Queue: View assigned patients and select to open Patient Case."""
     st.markdown(f"## 🏠 My Patient Queue — {doc_info.get('full_name', 'Doctor')}")
+    _render_workflow_trail(DOCTOR_WORKFLOW, "queue")
     st.caption(f"{doc_info.get('specialization', '')} | {doc_info.get('facility_name', '')}")
 
     kpis = DoctorService.get_doctor_kpi_counts(db, doctor_id)
@@ -1202,6 +1302,7 @@ def show_doctor_patient_case(db, doctor_id: int):
         st.markdown(f"**Token:** `{patient_details['token_number']}` | Dept: {patient_details['department']}")
         st.markdown(f"**Status:** `{patient_details['token_status']}` | Visit ID: `{patient_details.get('visit_id', '')}`")
 
+    _render_workflow_trail(DOCTOR_WORKFLOW, "case")
     st.markdown("---")
 
     # --- SECTION 1: CURRENT CASE ---
@@ -1365,7 +1466,11 @@ def show_doctor_prescription_and_notes(db, doctor_id: int):
 
     # Header banner
     st.markdown(f"## 💊 Prescription & Clinical Notes — **{patient_details['patient_name']}**")
+    _render_workflow_trail(DOCTOR_WORKFLOW, "rx")
     st.caption(f"Patient ID: `{patient_details['patient_id']}` | Token: `{patient_details['token_number']}` | Dept: {patient_details['department']}")
+    if st.button("← Back to Patient Case", use_container_width=False, key="btn_rx_back_case"):
+        st.session_state.doctor_nav = "Patient Case"
+        st.rerun()
     st.markdown("---")
 
     # 1. Clinical Notes & Diagnosis
@@ -1518,7 +1623,18 @@ def show_doctor_prescription_and_notes(db, doctor_id: int):
 def show_doctor_referrals(db, doctor_id: int):
     """Inter-hospital referral workflow: Create referral package & view sent referrals."""
     st.markdown("## 🔄 Inter-Hospital Referral System")
+    _render_workflow_trail(DOCTOR_WORKFLOW, "referral")
     st.caption("Seamless patient data handoff between facilities. No duplicate patient records.")
+
+    back_col_1, back_col_2 = st.columns(2)
+    with back_col_1:
+        if st.button("← Back to Patient Case", use_container_width=True, key="btn_ref_back_case"):
+            st.session_state.doctor_nav = "Patient Case"
+            st.rerun()
+    with back_col_2:
+        if st.button("← Back to Prescription & Notes", use_container_width=True, key="btn_ref_back_rx"):
+            st.session_state.doctor_nav = "Prescription & Notes"
+            st.rerun()
 
     tabs = st.tabs(["📤 Create Inter-Hospital Referral", "📋 My Outgoing Referrals"])
 
@@ -1721,8 +1837,7 @@ def show_patient_portal_page(db):
     if not patient:
         st.warning("No patient record loaded.")
         if st.button("Return to Staff Login"):
-            st.session_state.logged_in = False
-            st.session_state.patient_portal_id = None
+            AuthSessionService.logout()
             st.rerun()
         return
 
@@ -1742,9 +1857,7 @@ def show_patient_portal_page(db):
             st.rerun()
 
     if st.sidebar.button("🚪 Exit Patient View", use_container_width=True):
-        st.session_state.logged_in = False
-        st.session_state.patient_portal_id = None
-        st.session_state.user_role = None
+        AuthSessionService.logout()
         st.rerun()
 
     # WhatsApp-style Header
@@ -1888,20 +2001,27 @@ def main():
     db = get_session()
 
     try:
+        # 1) Re-validate an existing session against live database state.
+        #    Force-logout only when the account is genuinely gone/inactive.
+        AuthSessionService.revalidate_session(db)
+
+        # 2) If session state is absent (e.g. full browser refresh) but a valid
+        #    signed URL token survives, re-establish the session without login.
+        if not st.session_state.logged_in:
+            AuthSessionService.restore_session(db)
+
         if not st.session_state.logged_in:
             show_login_page(db)
             return
 
-        role = str(st.session_state.user_role).lower() if st.session_state.user_role else ""
-        if "." in role:
-            role = role.split(".")[-1]
+        role = normalize_role(st.session_state.user_role)
 
         if role == "receptionist":
-            show_receptionist_dashboard(db)
+            _safe_render("Receptionist", show_receptionist_dashboard, db)
         elif role == "doctor":
-            show_doctor_dashboard(db)
+            _safe_render("Doctor", show_doctor_dashboard, db)
         elif role == "patient":
-            show_patient_portal_page(db)
+            _safe_render("Patient Portal", show_patient_portal_page, db)
         else:
             show_login_page(db)
     finally:
