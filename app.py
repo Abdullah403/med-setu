@@ -29,6 +29,13 @@ from services.management_service import ManagementService
 from services.session_service import AuthSessionService, normalize_role
 from services.navigation import DOCTOR_WORKFLOW, RECEPTIONIST_WORKFLOW, trail_text_with_current
 from services.ui_helpers import set_page_style
+from services.authorization import get_facility_id as _get_facility_id_from_session
+
+
+def _current_facility_id() -> int:
+    """Extract the current user's facility_id from session state."""
+    user_data = st.session_state.get("user_data") or {}
+    return _get_facility_id_from_session(user_data)
 
 # ==================== PAGE CONFIGURATION ====================
 st.set_page_config(
@@ -334,7 +341,7 @@ def show_receptionist_overview(db, facility_info):
     st.markdown(f"## 🏠 Front Desk Dashboard — {fac_name}")
     _render_workflow_trail(RECEPTIONIST_WORKFLOW, "dashboard")
 
-    kpis = DashboardService.get_kpi_counts(db)
+    kpis = DashboardService.get_kpi_counts(db, facility_id=_current_facility_id())
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric("Today's Patients", kpis.get("total_patients", 0))
@@ -367,7 +374,7 @@ def show_receptionist_overview(db, facility_info):
             st.rerun()
 
     st.markdown("### 📋 Today's Queue Overview")
-    queue_data = DashboardService.get_queue_table_data(db)
+    queue_data = DashboardService.get_queue_table_data(db, facility_id=_current_facility_id())
     if queue_data:
         display_rows = [
             {
@@ -608,7 +615,7 @@ def show_receptionist_patients(db, facility_info):
             st.dataframe(pat_rows, use_container_width=True, hide_index=True)
 
         with t_staff:
-            staff_list = ManagementService.get_all_staff(db)
+            staff_list = ManagementService.get_all_staff(db, user_data=st.session_state.get("user_data"))
             st.markdown(f"**Total Staff Accounts:** {len(staff_list)}")
             st.dataframe(staff_list, use_container_width=True, hide_index=True)
             st.markdown("##### Staff Account Status Control")
@@ -621,14 +628,14 @@ def show_receptionist_patients(db, facility_info):
                 st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
                 if sel_staff and sel_staff["is_active"]:
                     if st.button("Deactivate Staff", key=f"deact_staff_{sel_staff['id']}", use_container_width=True):
-                        res = ManagementService.deactivate_staff(db, sel_staff["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin")
+                        res = ManagementService.deactivate_staff(db, sel_staff["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", user_data=st.session_state.get("user_data"))
                         st.success(res["message"])
                         st.rerun()
             with sc3:
                 st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
                 if sel_staff and not sel_staff["is_active"]:
                     if st.button("Reactivate Staff", key=f"react_staff_{sel_staff['id']}", use_container_width=True):
-                        res = ManagementService.reactivate_staff(db, sel_staff["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin")
+                        res = ManagementService.reactivate_staff(db, sel_staff["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", user_data=st.session_state.get("user_data"))
                         st.success(res["message"])
                         st.rerun()
 
@@ -646,19 +653,19 @@ def show_receptionist_patients(db, facility_info):
                 st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
                 if sel_fac and sel_fac["is_active"]:
                     if st.button("Deactivate Facility", key=f"deact_fac_{sel_fac['id']}", use_container_width=True):
-                        res = ManagementService.deactivate_facility(db, sel_fac["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin")
+                        res = ManagementService.deactivate_facility(db, sel_fac["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", user_data=st.session_state.get("user_data"))
                         st.success(res["message"])
                         st.rerun()
             with sc3:
                 st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
                 if sel_fac and not sel_fac["is_active"]:
                     if st.button("Reactivate Facility", key=f"react_fac_{sel_fac['id']}", use_container_width=True):
-                        res = ManagementService.reactivate_facility(db, sel_fac["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin")
+                        res = ManagementService.reactivate_facility(db, sel_fac["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", user_data=st.session_state.get("user_data"))
                         st.success(res["message"])
                         st.rerun()
 
         with t_vis:
-            recent_visits = ManagementService.get_recent_visits(db, limit=30)
+            recent_visits = ManagementService.get_recent_visits(db, limit=30, user_data=st.session_state.get("user_data"))
             st.markdown(f"**Recent Patient Visits (showing latest {len(recent_visits)}):**")
             st.dataframe(recent_visits, use_container_width=True, hide_index=True)
             st.markdown("##### Delete Demo/Test Visit (Controlled)")
@@ -898,7 +905,7 @@ def show_receptionist_queue(db, facility_info):
     _render_workflow_trail(RECEPTIONIST_WORKFLOW, "queue")
     st.caption("Manage patient queue transitions and token statuses in real time.")
 
-    queue_data = DashboardService.get_queue_table_data(db)
+    queue_data = DashboardService.get_queue_table_data(db, facility_id=_current_facility_id())
 
     if not queue_data:
         st.markdown(f"""

@@ -3,15 +3,28 @@ from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 from database.models import User, Doctor, Facility, Visit, Patient
 from services.session_service import is_role_allowed, ADMIN_LIKE_ROLES, denial
+from services.authorization import (
+    get_facility_id, is_global_role, check_staff_access, user_belongs_to_facility,
+)
 
 
 class ManagementService:
     """Safe management of staff accounts, facilities, visits, and demo data."""
 
     @staticmethod
-    def get_all_staff(db: Session) -> List[Dict[str, Any]]:
-        """Retrieve all staff and doctor accounts."""
-        users = db.query(User).order_by(User.id).all()
+    def get_all_staff(db: Session, user_data: dict = None) -> List[Dict[str, Any]]:
+        """Retrieve staff and doctor accounts, scoped to the user's facility unless global."""
+        q = db.query(User).order_by(User.id)
+        if user_data and not is_global_role(user_data):
+            fid = get_facility_id(user_data)
+            if fid:
+                q = q.filter(
+                    (User.facility_id == fid) |
+                    (User.id.in_(
+                        db.query(Doctor.user_id).filter(Doctor.facility_id == fid)
+                    ))
+                )
+        users = q.all()
         staff_list = []
         for u in users:
             role_val = u.role.value if hasattr(u.role, "value") else str(u.role)
@@ -31,10 +44,14 @@ class ManagementService:
         return staff_list
 
     @staticmethod
-    def deactivate_staff(db: Session, user_id: int, requester_role: str = "hospital_admin") -> Dict[str, Any]:
+    def deactivate_staff(db: Session, user_id: int, requester_role: str = "hospital_admin", user_data: dict = None) -> Dict[str, Any]:
         """Deactivate a staff account. Doctor records and historical visits remain intact."""
         if not is_role_allowed(requester_role, ADMIN_LIKE_ROLES):
             return denial("Unauthorized: Staff account management requires an administrative role.")
+
+        auth_err = check_staff_access(db, user_id, user_data)
+        if auth_err:
+            return auth_err
 
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -47,10 +64,14 @@ class ManagementService:
         return {"success": True, "message": f"Account for {user.full_name} ({user.username}) deactivated."}
 
     @staticmethod
-    def reactivate_staff(db: Session, user_id: int, requester_role: str = "hospital_admin") -> Dict[str, Any]:
+    def reactivate_staff(db: Session, user_id: int, requester_role: str = "hospital_admin", user_data: dict = None) -> Dict[str, Any]:
         """Reactivate a previously deactivated staff account."""
         if not is_role_allowed(requester_role, ADMIN_LIKE_ROLES):
             return denial("Unauthorized: Staff account management requires an administrative role.")
+
+        auth_err = check_staff_access(db, user_id, user_data)
+        if auth_err:
+            return auth_err
 
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -82,10 +103,15 @@ class ManagementService:
         ]
 
     @staticmethod
-    def deactivate_facility(db: Session, facility_id: int, requester_role: str = "hospital_admin") -> Dict[str, Any]:
+    def deactivate_facility(db: Session, facility_id: int, requester_role: str = "hospital_admin", user_data: dict = None) -> Dict[str, Any]:
         """Deactivate a facility. Historical visits and referrals are safely preserved."""
         if not is_role_allowed(requester_role, ADMIN_LIKE_ROLES):
             return denial("Unauthorized: Facility management requires an administrative role.")
+
+        if not is_global_role(user_data):
+            fid = get_facility_id(user_data)
+            if fid and fid != facility_id:
+                return denial("Unauthorized: Cannot manage a facility you do not belong to.")
 
         fac = db.query(Facility).filter(Facility.id == facility_id).first()
         if not fac:
@@ -96,10 +122,15 @@ class ManagementService:
         return {"success": True, "message": f"Facility {fac.name} deactivated."}
 
     @staticmethod
-    def reactivate_facility(db: Session, facility_id: int, requester_role: str = "hospital_admin") -> Dict[str, Any]:
+    def reactivate_facility(db: Session, facility_id: int, requester_role: str = "hospital_admin", user_data: dict = None) -> Dict[str, Any]:
         """Reactivate a previously deactivated facility."""
         if not is_role_allowed(requester_role, ADMIN_LIKE_ROLES):
             return denial("Unauthorized: Facility management requires an administrative role.")
+
+        if not is_global_role(user_data):
+            fid = get_facility_id(user_data)
+            if fid and fid != facility_id:
+                return denial("Unauthorized: Cannot manage a facility you do not belong to.")
 
         fac = db.query(Facility).filter(Facility.id == facility_id).first()
         if not fac:
@@ -110,9 +141,14 @@ class ManagementService:
         return {"success": True, "message": f"Facility {fac.name} reactivated."}
 
     @staticmethod
-    def get_recent_visits(db: Session, limit: int = 50) -> List[Dict[str, Any]]:
-        """Retrieve recent visits for administrative review."""
-        visits = db.query(Visit).order_by(Visit.id.desc()).limit(limit).all()
+    def get_recent_visits(db: Session, limit: int = 50, user_data: dict = None) -> List[Dict[str, Any]]:
+        """Retrieve recent visits for administrative review, scoped to facility unless global."""
+        q = db.query(Visit).order_by(Visit.id.desc())
+        if user_data and not is_global_role(user_data):
+            fid = get_facility_id(user_data)
+            if fid:
+                q = q.filter(Visit.facility_id == fid)
+        visits = q.limit(limit).all()
         rows = []
         for v in visits:
             rows.append({

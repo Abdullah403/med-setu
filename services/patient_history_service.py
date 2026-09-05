@@ -11,28 +11,31 @@ from database.models import (
     Referral,
     FollowUp,
 )
+from services.authorization import (
+    get_facility_id, is_global_role, patient_has_visits_at_facility, denial,
+)
 
 
 class PatientHistoryService:
     """Service for compiling comprehensive, chronological medical histories."""
 
     @staticmethod
-    def get_full_history(db: Session, patient_id: int) -> Dict[str, Any]:
+    def get_full_history(db: Session, patient_id: int, facility_id: int = None) -> Dict[str, Any]:
         """
         Compile full chronological medical timeline for a patient.
         Returns patient details and visit records containing cases, prescriptions,
         doctor notes, documents, referrals, and follow-ups.
+
+        When facility_id is provided, only includes visits at that facility.
         """
         patient = db.query(Patient).filter(Patient.id == patient_id).first()
         if not patient:
             return {}
 
-        visits = (
-            db.query(Visit)
-            .filter(Visit.patient_id == patient_id)
-            .order_by(Visit.visit_date.desc())
-            .all()
-        )
+        visit_q = db.query(Visit).filter(Visit.patient_id == patient_id)
+        if facility_id:
+            visit_q = visit_q.filter(Visit.facility_id == facility_id)
+        visits = visit_q.order_by(Visit.visit_date.desc()).all()
 
         timeline_visits = []
         for visit in visits:
@@ -88,10 +91,13 @@ class PatientHistoryService:
         }
 
     @staticmethod
-    def get_visit_detail(db: Session, visit_id: int) -> Optional[Dict[str, Any]]:
-        """Fetch all clinical artifacts for a specific visit."""
+    def get_visit_detail(db: Session, visit_id: int, facility_id: int = None) -> Optional[Dict[str, Any]]:
+        """Fetch all clinical artifacts for a specific visit.
+        When facility_id is provided, verifies the visit belongs to that facility."""
         visit = db.query(Visit).filter(Visit.id == visit_id).first()
         if not visit:
+            return None
+        if facility_id and visit.facility_id != facility_id:
             return None
 
         cases = (
