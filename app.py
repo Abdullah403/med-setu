@@ -64,7 +64,20 @@ if "patient_workflow_stage" not in st.session_state:
 
 # Apply UI styles and ensure database tables exist
 set_page_style()
-init_db()
+
+
+@st.cache_resource
+def _init_database():
+    """Initialize database tables and seed data once per server process.
+
+    Using @st.cache_resource ensures this runs at most once per Streamlit
+    server lifetime, preventing repeated create_all/seed calls on every
+    page rerun and avoiding accidental writes to med_setu.db.
+    """
+    init_db()
+
+
+_init_database()
 
 
 # ==================== SESSION LIFECYCLE HELPERS ====================

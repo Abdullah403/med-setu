@@ -18,8 +18,14 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)
 
 
+_migrations_applied = False
+
+
 def ensure_schema_migrations():
-    """Apply safe additive migrations to existing database non-destructively."""
+    """Apply safe additive migrations to existing database non-destructively.
+
+    Runs at most once per process via the lazy guard _ensure_migrations_once().
+    """
     try:
         with engine.connect() as conn:
             res = conn.exec_driver_sql("PRAGMA table_info(patients)").fetchall()
@@ -27,11 +33,22 @@ def ensure_schema_migrations():
             if col_names and "is_active" not in col_names:
                 conn.exec_driver_sql("ALTER TABLE patients ADD COLUMN is_active BOOLEAN DEFAULT 1")
                 conn.commit()
-    except Exception as e:
+    except Exception:
         pass
 
 
-ensure_schema_migrations()
+def _ensure_migrations_once():
+    """Run schema migrations at most once per process lifetime.
+
+    This is called lazily from get_session() and init_db() instead of at
+    import time, preventing accidental writes to med_setu.db when modules
+    are merely imported (e.g. during tests or audits).
+    """
+    global _migrations_applied
+    if _migrations_applied:
+        return
+    ensure_schema_migrations()
+    _migrations_applied = True
 
 
 def get_db():
@@ -45,6 +62,7 @@ def get_db():
 
 def init_db():
     """Initialize database - create all tables and seed data"""
+    _ensure_migrations_once()
     Base.metadata.create_all(bind=engine)
     # Seed database if empty
     from database.seed_data import seed_database
@@ -53,4 +71,5 @@ def init_db():
 
 def get_session() -> Session:
     """Get a new database session"""
+    _ensure_migrations_once()
     return SessionLocal()

@@ -21,6 +21,8 @@ from database.models import (
     ReferralDataPackage, FollowUp
 )
 
+_PROD_DB_MARKER = "sqlite:///./med_setu.db"
+
 
 def reset_and_seed_demo_dataset(
     db: Session,
@@ -44,6 +46,16 @@ def reset_and_seed_demo_dataset(
         return {
             "success": False,
             "error": "Unauthorized: Demo reset requires administrative privileges."
+        }
+
+    db_url = str(db.get_bind().url)
+    if _PROD_DB_MARKER in db_url and os.environ.get("MED_SETU_ALLOW_DEMO_RESET") != "true":
+        return {
+            "success": False,
+            "error": (
+                "Blocked: Refusing to reset demo data against the production database. "
+                "Set MED_SETU_ALLOW_DEMO_RESET=true to override."
+            )
         }
 
     if not confirmed:
