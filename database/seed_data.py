@@ -4,6 +4,7 @@ import bcrypt
 from sqlalchemy.orm import Session
 from database.models import (
     User, Facility, Department, Doctor, Patient, Visit, Token,
+    PatientCase, FollowUp, Referral, MedicalDocument,
     UserRole, TokenStatus
 )
 from database.db import SessionLocal, init_db
@@ -430,6 +431,180 @@ def _ensure_admin_accounts(db: Session):
                 is_active=True,
             )
             db.add(anganwadi_worker)
+
+    # Flush so _ensure_phase3bc_demo_data can query newly added users
+    db.flush()
+
+    # ── Phase 3B+3C: Worker-submitted cases and follow-up scenarios ──
+    _ensure_phase3bc_demo_data(db)
+
+
+def _ensure_phase3bc_demo_data(db: Session):
+    """Add Phase 3B+3C demo data: worker-submitted cases, follow-ups, escalation scenarios.
+
+    Safe to call on existing databases — only inserts missing records.
+    Does not modify or delete any existing records.
+    """
+    from database.models import (
+        PatientCase, FollowUp, Referral, MedicalDocument,
+        Patient, Visit, Doctor, User, Facility, Department,
+    )
+    now = datetime.utcnow()
+
+    # Find ASHA worker in Facility A
+    asha = db.query(User).filter(
+        User.username == "asha_demo",
+        User.role == UserRole.ASHA_WORKER,
+    ).first()
+    if not asha:
+        return
+
+    fac_a = asha.facility
+    if not fac_a:
+        return
+
+    # Find doctor and department in Facility A
+    doctor = db.query(Doctor).filter(Doctor.facility_id == fac_a.id).first()
+    if not doctor:
+        return
+    dept = db.query(Department).filter(Department.facility_id == fac_a.id).first()
+
+    # Find an existing patient (Rahim Shaikh) for a worker-submitted case
+    rahim = db.query(Patient).filter(Patient.patient_id == "PAT-00184").first()
+    if rahim:
+        existing_case = db.query(PatientCase).filter(
+            PatientCase.patient_id == rahim.id,
+            PatientCase.submitted_by_worker_id == asha.id,
+        ).first()
+        if not existing_case:
+            # Create a visit for worker-submitted case
+            visit_worker = Visit(
+                visit_id="VIS-2026-W001",
+                patient_id=rahim.id,
+                facility_id=fac_a.id,
+                department_id=dept.id if dept else doctor.department_id,
+                doctor_id=doctor.id,
+                visit_date=now - timedelta(hours=3),
+                status="ongoing",
+            )
+            db.add(visit_worker)
+            db.flush()
+
+            case_worker = PatientCase(
+                patient_id=rahim.id,
+                visit_id=visit_worker.id,
+                chief_complaint="Persistent cough for 5 days, mild fever",
+                duration="5 days",
+                symptoms="cough, low-grade fever, mild body ache",
+                additional_notes="Patient reports worsening symptoms in the morning.",
+                ai_summary="Possible upper respiratory infection. Monitor for 3-5 days. No immediate red flags.",
+                red_flag_detected=False,
+                submitted_by_worker_id=asha.id,
+                submitted_at=now - timedelta(hours=3),
+                worker_notes="Patient self-reported symptoms. Worker assisted with case intake.",
+            )
+            db.add(case_worker)
+            db.flush()
+
+            # Add a follow-up for this case (overdue)
+            fu_overdue = FollowUp(
+                visit_id=visit_worker.id,
+                patient_id=rahim.id,
+                doctor_id=doctor.id,
+                follow_up_date=now - timedelta(days=1),
+                reason="Post-intake symptom monitoring",
+                status="scheduled",
+            )
+            db.add(fu_overdue)
+
+            # Add a completed follow-up
+            fu_completed = FollowUp(
+                visit_id=visit_worker.id,
+                patient_id=rahim.id,
+                doctor_id=doctor.id,
+                follow_up_date=now - timedelta(days=3),
+                reason="Initial intake follow-up",
+                status="completed",
+                worker_outcome="PATIENT_ATTENDED",
+                worker_outcome_at=now - timedelta(days=3),
+                worker_outcome_by_id=asha.id,
+                worker_outcome_notes="Patient reports mild improvement.",
+                escalated=False,
+            )
+            db.add(fu_completed)
+
+    # Find another patient (Anjali Patel) for escalation scenario
+    anjali = db.query(Patient).filter(Patient.patient_id == "PAT-00185").first()
+    if anjali:
+        existing_esc = db.query(FollowUp).filter(
+            FollowUp.patient_id == anjali.id,
+            FollowUp.escalated == True,
+        ).first()
+        if not existing_esc:
+            visit_anj = db.query(Visit).filter(
+                Visit.patient_id == anjali.id,
+            ).first()
+            if visit_anj:
+                fu_escalated = FollowUp(
+                    visit_id=visit_anj.id,
+                    patient_id=anjali.id,
+                    doctor_id=doctor.id,
+                    follow_up_date=now - timedelta(days=2),
+                    reason="Post-dental procedure follow-up",
+                    status="scheduled",
+                    worker_outcome="PATIENT_DID_NOT_ATTEND",
+                    worker_outcome_at=now - timedelta(days=2),
+                    worker_outcome_by_id=asha.id,
+                    worker_outcome_notes="Patient did not attend follow-up. Could not be reached by phone.",
+                    escalated=True,
+                    escalated_at=now - timedelta(days=2),
+                )
+                db.add(fu_escalated)
+
+    # Find Vikram Desai for referral follow-up scenario
+    vikram = db.query(Patient).filter(Patient.patient_id == "PAT-00188").first()
+    if vikram:
+        existing_ref = db.query(Referral).filter(
+            Referral.patient_id == vikram.id,
+        ).first()
+        if not existing_ref:
+            visit_vik = db.query(Visit).filter(
+                Visit.patient_id == vikram.id,
+            ).first()
+            if visit_vik:
+                # Find receiving facility (District General Hospital)
+                fac_b = db.query(Facility).filter(Facility.name.like("%District%")).first()
+                if fac_b:
+                    cardio_b = db.query(Department).filter(
+                        Department.facility_id == fac_b.id,
+                        Department.name == "Cardiology",
+                    ).first()
+                    if cardio_b:
+                        referral = Referral(
+                            referral_id=f"REF-{now.year}-00099",
+                            visit_id=visit_vik.id,
+                            patient_id=vikram.id,
+                            referring_doctor_id=doctor.id,
+                            referring_facility_id=fac_a.id,
+                            receiving_facility_id=fac_b.id,
+                            receiving_department_id=cardio_b.id,
+                            reason="Suspected cardiac issue requires specialist evaluation.",
+                            urgency="urgent",
+                            status="pending",
+                            verification_code="A1B2C3",
+                        )
+                        db.add(referral)
+                        db.flush()
+
+                        fu_referral = FollowUp(
+                            visit_id=visit_vik.id,
+                            patient_id=vikram.id,
+                            doctor_id=doctor.id,
+                            follow_up_date=now + timedelta(days=2),
+                            reason="Referral appointment follow-up",
+                            status="scheduled",
+                        )
+                        db.add(fu_referral)
 
 
 if __name__ == "__main__":

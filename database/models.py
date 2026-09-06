@@ -193,8 +193,14 @@ class PatientCase(Base):
     red_flags = Column(String, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Phase 3B: Worker-submitted intake tracking
+    submitted_by_worker_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    submitted_at = Column(DateTime, nullable=True)
+    worker_notes = Column(String, default="")
+
     patient = relationship("Patient", back_populates="cases")
     visit = relationship("Visit", back_populates="cases")
+    submitted_by_worker = relationship("User", foreign_keys=[submitted_by_worker_id])
 
 
 class MedicalDocument(Base):
@@ -371,7 +377,16 @@ class FollowUp(Base):
     status = Column(String, default="scheduled")  # scheduled, completed, missed, cancelled
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Phase 3C: Worker follow-up outcome tracking
+    worker_outcome = Column(String, default="")
+    worker_outcome_at = Column(DateTime, nullable=True)
+    worker_outcome_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    worker_outcome_notes = Column(String, default="")
+    escalated = Column(Boolean, default=False)
+    escalated_at = Column(DateTime, nullable=True)
+
     # Relationships
     visit = relationship("Visit", back_populates="follow_ups")
     patient = relationship("Patient", back_populates="follow_ups")
     doctor = relationship("Doctor", back_populates="follow_ups")
+    worker_outcome_by = relationship("User", foreign_keys=[worker_outcome_by_id])

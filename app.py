@@ -1863,6 +1863,18 @@ def show_doctor_patient_case(db, doctor_id: int):
         else:
             st.success("✓ No acute red flags identified in patient submission.")
 
+        # Phase 3B: Show assisted-intake provenance if case was submitted by a worker
+        if case.submitted_by_worker_id:
+            worker = db.query(User).filter(User.id == case.submitted_by_worker_id).first()
+            worker_name = worker.full_name if worker else "Unknown"
+            worker_role = "ASHA Worker" if worker and "asha" in (worker.role.value if hasattr(worker.role, 'value') else str(worker.role)).lower() else "Anganwadi Worker"
+            st.info(
+                f"**Assisted Intake:** This case was reported by **{worker_name}** ({worker_role}) "
+                f"on behalf of the patient."
+            )
+            if case.worker_notes:
+                st.markdown(f"**Worker Notes:** {case.worker_notes}")
+
         col_c1, col_c2 = st.columns(2)
         with col_c1:
             st.markdown(f"**Chief Complaint:**\n{case.chief_complaint}")
@@ -2540,8 +2552,8 @@ def show_patient_portal_page(db):
 
 
 # ==============================================================================
-# SECTION 5A: ASHA / ANGANWADI WORKER WORKSPACE (Phase 3A)
-# Dashboard | Patients | Register / Assist Patient | Case Intake | Referrals | Follow-ups
+# SECTION 5A: ASHA / ANGANWADI WORKER WORKSPACE (Phase 3A + 3B + 3C)
+# Dashboard | Patients | Register / Assist | Case Intake | Follow-ups | Referrals
 # ==============================================================================
 
 def render_worker_sidebar(facility_info: dict) -> str:
@@ -2550,7 +2562,7 @@ def render_worker_sidebar(facility_info: dict) -> str:
     st.sidebar.markdown("**👩‍⚕️ ASHA / Anganwadi Worker**")
     st.sidebar.markdown("---")
 
-    nav_options = ["🏠 Dashboard", "👤 Patients", "📝 Register / Assist", "📋 Case Intake", "🔄 Referrals", "📅 Follow-ups"]
+    nav_options = ["🏠 Dashboard", "👤 Patients", "📝 Register / Assist", "📋 Case Intake", "📅 Follow-ups", "🔄 Referrals"]
     current_nav_index = 0
     clean_current = st.session_state.worker_nav
     for i, opt in enumerate(nav_options):
@@ -2572,10 +2584,10 @@ def render_worker_sidebar(facility_info: dict) -> str:
         clean_nav = "Register / Assist Patient"
     elif "Case" in nav:
         clean_nav = "Case Intake"
-    elif "Referral" in nav:
-        clean_nav = "Referrals"
     elif "Follow" in nav:
         clean_nav = "Follow-ups"
+    elif "Referral" in nav:
+        clean_nav = "Referrals"
     else:
         clean_nav = "Dashboard"
 
@@ -2609,12 +2621,16 @@ def show_worker_dashboard(db, facility_info):
         st.error(stats["error"])
         return
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric("Patients Assisted Today", stats.get("patients_today", 0))
     with c2:
-        st.metric("Pending Follow-ups", stats.get("pending_followups", 0))
+        overdue = stats.get("overdue_followups", 0)
+        st.metric("Overdue Follow-ups", overdue, delta=f"-{overdue}" if overdue else None, delta_color="inverse" if overdue else "off")
     with c3:
+        escalated = stats.get("escalated_count", 0)
+        st.metric("Escalated", escalated)
+    with c4:
         st.metric("Active Referrals", stats.get("active_referrals", 0))
 
     st.markdown("---")
@@ -2638,6 +2654,8 @@ def show_worker_dashboard(db, facility_info):
                 "Patient": c["patient_name"],
                 "Patient ID": c["patient_id"],
                 "Chief Complaint": c["chief_complaint"],
+                "Assisted": "Yes" if c.get("is_assisted_intake") else "",
+                "Submitted": c.get("submitted_at") or "",
                 "Status": c["status"],
                 "Date": c["date"],
             }
@@ -2680,7 +2698,6 @@ def show_worker_patients(db, facility_info):
                             st.session_state.worker_viewing_patient_id = p.id
                     st.markdown("---")
 
-            # Show patient details if viewing
             if st.session_state.get("worker_viewing_patient_id"):
                 pid = st.session_state.worker_viewing_patient_id
                 details = WorkerService.get_patient_details(db, user_data, pid)
@@ -2747,7 +2764,7 @@ def show_worker_register(db, facility_info):
 
 
 def show_worker_case_intake(db, facility_info):
-    """Worker assisted case intake page."""
+    """Worker assisted case intake page with review and submission workflow."""
     st.markdown("## 📋 Assisted Case Intake")
     _render_workflow_trail(WORKER_WORKFLOW, "intake")
 
@@ -2757,6 +2774,23 @@ def show_worker_case_intake(db, facility_info):
         "**Important:** Recorded information is patient-reported / worker-entered. "
         "Clinical diagnosis and treatment remain the responsibility of a qualified healthcare professional."
     )
+
+    # If viewing a submitted case
+    if st.session_state.get("worker_view_case_id"):
+        _show_case_detail_view(db, user_data)
+        return
+
+    # If in document attachment mode after intake
+    visit_id = st.session_state.get("worker_intake_visit_id")
+    patient_id_for_doc = st.session_state.get("worker_intake_patient_id")
+    if visit_id and patient_id_for_doc:
+        _show_document_attachment(db, user_data, visit_id, patient_id_for_doc)
+        return
+
+    # If in review/submit mode after creating intake
+    if st.session_state.get("worker_review_case_id"):
+        _show_case_review_and_submit(db, user_data)
+        return
 
     # Patient selection
     selected_patient_id = st.session_state.get("worker_selected_patient_id")
@@ -2805,7 +2839,6 @@ def show_worker_case_intake(db, facility_info):
 
     st.markdown("---")
 
-    # Case intake form
     with st.form("worker_case_intake"):
         st.markdown("### Case Information (Patient-Reported)")
         chief_complaint = st.text_area("Chief Complaint *", placeholder="What is the main problem? e.g. Fever, cough, headache...")
@@ -2817,7 +2850,7 @@ def show_worker_case_intake(db, facility_info):
         additional_notes = st.text_area("Additional Notes", placeholder="Any other information the patient reported...")
 
         st.markdown("---")
-        submitted = st.form_submit_button("Submit Case Intake", use_container_width=True)
+        submitted = st.form_submit_button("Create Case Intake", use_container_width=True)
 
         if submitted:
             if not chief_complaint:
@@ -2828,60 +2861,292 @@ def show_worker_case_intake(db, facility_info):
                     chief_complaint, duration, symptoms, additional_notes
                 )
                 if result.get("success"):
-                    st.success(result.get("message", "Case intake submitted."))
-                    st.session_state.pop("worker_selected_patient_id", None)
-                    if st.button("Attach Documents (Optional)"):
-                        st.session_state.worker_intake_visit_id = result["visit"].id
-                        st.session_state.worker_intake_patient_id = patient.id
-                        st.session_state.worker_nav = "Case Intake"
-                        st.rerun()
+                    case = result["case"]
+                    st.session_state.worker_review_case_id = case.id
+                    st.session_state.worker_selected_patient_id = None
+                    st.rerun()
                 else:
                     st.error(result.get("error", "Failed to create intake."))
 
-    # Document attachment section (if coming from successful intake)
-    visit_id = st.session_state.get("worker_intake_visit_id")
-    patient_id_for_doc = st.session_state.get("worker_intake_patient_id")
-    if visit_id and patient_id_for_doc:
-        st.markdown("---")
-        st.markdown("### 📎 Attach Documents (Optional)")
-        st.caption("Upload previous prescriptions, lab reports, discharge summaries, or other medical documents.")
 
-        uploaded_file = st.file_uploader(
-            "Choose file",
-            type=["pdf", "jpg", "jpeg", "png"],
-            key="worker_doc_upload",
-        )
-        if uploaded_file:
-            if st.button("Upload Document"):
-                result = WorkerService.attach_document(
-                    db, user_data, patient_id_for_doc, visit_id, uploaded_file, uploaded_file.name
-                )
-                if result.get("success"):
-                    st.success(f"Document **{uploaded_file.name}** uploaded successfully.")
-                    doc = result["document"]
-                    if doc.extracted_text:
-                        st.info(
-                            f"**Extracted Text (OCR):** This is machine-extracted text and is NOT medically verified.\n\n"
-                            f"{doc.extracted_text[:500]}..."
-                        )
-                else:
-                    st.error(result.get("error", "Upload failed."))
+def _show_case_review_and_submit(db, user_data):
+    """Show case review before submission to healthcare team."""
+    case_id = st.session_state.worker_review_case_id
+    details = WorkerService.get_assisted_case_details(db, user_data, case_id)
 
-        # Show existing documents
-        docs = WorkerService.get_documents_for_visit(db, user_data, patient_id_for_doc, visit_id)
-        if docs:
-            st.markdown("**Attached Documents:**")
-            for doc in docs:
-                st.markdown(f"- 📄 {doc.file_name} ({doc.file_type}) — {doc.created_at.strftime('%Y-%m-%d %H:%M')}")
+    if not details.get("success"):
+        st.error(details.get("error", "Could not load case."))
+        st.session_state.pop("worker_review_case_id", None)
+        return
 
-        if st.button("Done"):
-            st.session_state.pop("worker_intake_visit_id", None)
-            st.session_state.pop("worker_intake_patient_id", None)
+    case = details["case"]
+    patient = details["patient"]
+    visit = details["visit"]
+    documents = details["documents"]
+
+    st.markdown("### 📋 Review Case Before Submission")
+
+    st.info(
+        "**Source:** Patient-reported / Worker-entered information\n\n"
+        "Review the information below before submitting to the healthcare team. "
+        "After submission, this information becomes part of the clinical workflow."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**Patient:** {patient['full_name']} ({patient['patient_id']})")
+        st.markdown(f"**Age/Gender:** {patient['age']} / {patient['gender']}")
+        st.markdown(f"**Department:** {visit['department']}")
+        st.markdown(f"**Assigned Doctor:** {visit['doctor']}")
+    with col2:
+        st.markdown(f"**Visit ID:** {visit['visit_id']}")
+        st.markdown(f"**Created:** {case['created_at']}")
+
+    st.markdown("---")
+    st.markdown("### Chief Complaint")
+    st.markdown(case["chief_complaint"])
+
+    if case["duration"]:
+        st.markdown(f"**Duration:** {case['duration']}")
+    if case["symptoms"]:
+        st.markdown(f"**Symptoms:** {case['symptoms']}")
+    if case["additional_notes"]:
+        st.markdown(f"**Additional Notes:** {case['additional_notes']}")
+    if case["red_flag_detected"]:
+        st.error(f"⚠️ Red Flags Detected: {case['red_flags']}")
+
+    if documents:
+        st.markdown("### 📎 Attached Documents")
+        for doc in documents:
+            ocr_label = " (OCR text available)" if doc["has_ocr_text"] else ""
+            st.markdown(f"- 📄 {doc['file_name']} ({doc['file_type']}){ocr_label}")
+
+    st.markdown("---")
+
+    worker_notes = st.text_area(
+        "Worker Notes (optional)",
+        placeholder="Any additional context for the healthcare team...",
+        key="worker_submit_notes",
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("📎 Attach Documents", use_container_width=True):
+            st.session_state.worker_intake_visit_id = db.query(Visit).filter(Visit.visit_id == visit["visit_id"]).first().id
+            patient_obj = db.query(Patient).filter(Patient.patient_id == patient["patient_id"]).first()
+            st.session_state.worker_intake_patient_id = patient_obj.id if patient_obj else None
+            st.session_state.pop("worker_review_case_id", None)
             st.rerun()
+    with c2:
+        if st.button("✅ Submit to Healthcare Team", use_container_width=True, type="primary"):
+            result = WorkerService.submit_case_to_healthcare(db, user_data, case_id, worker_notes)
+            if result.get("success"):
+                st.success(result["message"])
+                st.session_state.pop("worker_review_case_id", None)
+                st.rerun()
+            else:
+                st.error(result.get("error", "Submission failed."))
+
+    if st.button("← Back to Intake"):
+        st.session_state.pop("worker_review_case_id", None)
+        st.rerun()
+
+
+def _show_case_detail_view(db, user_data):
+    """Show case detail view (read-only after submission)."""
+    case_id = st.session_state.worker_view_case_id
+    details = WorkerService.get_assisted_case_details(db, user_data, case_id)
+
+    if not details.get("success"):
+        st.error(details.get("error", "Could not load case."))
+        st.session_state.pop("worker_view_case_id", None)
+        return
+
+    case = details["case"]
+    patient = details["patient"]
+    visit = details["visit"]
+    documents = details["documents"]
+
+    submitted_label = "Submitted" if details["is_submitted"] else "Draft"
+    st.markdown(f"### 📋 Case Details — {submitted_label}")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**Patient:** {patient['full_name']} ({patient['patient_id']})")
+        st.markdown(f"**Visit ID:** {visit['visit_id']}")
+        st.markdown(f"**Status:** {visit['status']}")
+    with col2:
+        if case["submitted_by_worker"]:
+            st.markdown(f"**Submitted by:** {case['submitted_by_worker']}")
+            st.markdown(f"**Submitted at:** {case['submitted_at']}")
+        st.markdown(f"**Doctor:** {visit['doctor']}")
+
+    st.markdown("---")
+    st.markdown(f"**Chief Complaint:** {case['chief_complaint']}")
+    if case["duration"]:
+        st.markdown(f"**Duration:** {case['duration']}")
+    if case["symptoms"]:
+        st.markdown(f"**Symptoms:** {case['symptoms']}")
+    if case["additional_notes"]:
+        st.markdown(f"**Additional Notes:** {case['additional_notes']}")
+    if case["worker_notes"]:
+        st.markdown(f"**Worker Notes:** {case['worker_notes']}")
+    if case["red_flag_detected"]:
+        st.error(f"⚠️ Red Flags: {case['red_flags']}")
+
+    if documents:
+        st.markdown("### 📎 Documents")
+        for doc in documents:
+            ocr_label = " — OCR text available" if doc["has_ocr_text"] else ""
+            st.markdown(f"- 📄 {doc['file_name']} ({doc['file_type']}){ocr_label}")
+
+    if st.button("← Back"):
+        st.session_state.pop("worker_view_case_id", None)
+        st.rerun()
+
+
+def _show_document_attachment(db, user_data, visit_id, patient_id_for_doc):
+    """Show document attachment section."""
+    st.markdown("### 📎 Attach Documents")
+    st.caption("Upload previous prescriptions, lab reports, discharge summaries, or other medical documents.")
+
+    uploaded_file = st.file_uploader(
+        "Choose file",
+        type=["pdf", "jpg", "jpeg", "png"],
+        key="worker_doc_upload",
+    )
+    if uploaded_file:
+        if st.button("Upload Document"):
+            result = WorkerService.attach_document(
+                db, user_data, patient_id_for_doc, visit_id, uploaded_file, uploaded_file.name
+            )
+            if result.get("success"):
+                st.success(f"Document **{uploaded_file.name}** uploaded successfully.")
+                doc = result["document"]
+                if doc.extracted_text:
+                    st.info(
+                        f"**Extracted Text (OCR):** AI/OCR extracted text — clinician verification required.\n\n"
+                        f"{doc.extracted_text[:500]}..."
+                    )
+            else:
+                st.error(result.get("error", "Upload failed."))
+
+    docs = WorkerService.get_documents_for_visit(db, user_data, patient_id_for_doc, visit_id)
+    if docs:
+        st.markdown("**Attached Documents:**")
+        for doc in docs:
+            st.markdown(f"- 📄 {doc.file_name} ({doc.file_type}) — {doc.created_at.strftime('%Y-%m-%d %H:%M')}")
+
+    if st.button("Done — Return to Intake"):
+        st.session_state.pop("worker_intake_visit_id", None)
+        st.session_state.pop("worker_intake_patient_id", None)
+        st.rerun()
+
+
+def show_worker_followups(db, facility_info):
+    """Worker follow-up support page with outcome recording and escalation."""
+    st.markdown("## 📅 Follow-ups")
+    _render_workflow_trail(WORKER_WORKFLOW, "followups")
+
+    user_data = st.session_state.user_data or {}
+
+    # Follow-up filter tabs
+    tab_all, tab_overdue, tab_scheduled = st.tabs(["All", "Overdue", "Scheduled"])
+
+    with tab_all:
+        followups = WorkerService.get_facility_followups(db, user_data)
+        _render_followup_list(db, user_data, followups, "all")
+
+    with tab_overdue:
+        overdue = WorkerService.get_facility_followups(db, user_data, status_filter="overdue")
+        if overdue:
+            st.warning(f"**{len(overdue)} overdue follow-up(s)** require attention.")
+        _render_followup_list(db, user_data, overdue, "overdue")
+
+    with tab_scheduled:
+        scheduled = WorkerService.get_facility_followups(db, user_data, status_filter="scheduled")
+        _render_followup_list(db, user_data, scheduled, "scheduled")
+
+
+def _render_followup_list(db, user_data, followups, context_label):
+    """Render a list of follow-ups with outcome recording."""
+    if not followups:
+        st.info(f"No {context_label} follow-ups found.")
+        return
+
+    display_rows = [
+        {
+            "Patient": f["patient_name"],
+            "Patient ID": f["patient_id"],
+            "Due Date": f["follow_up_date"],
+            "Reason": f["reason"],
+            "Status": f["status"],
+            "Overdue": "⚠️ Yes" if f["is_overdue"] else "",
+            "Worker Outcome": f["worker_outcome"] or "",
+            "Escalated": "🔴 Yes" if f["escalated"] else "",
+            "Referral": f["referral_id"] or "",
+            "Visit": f["visit_id"],
+        }
+        for f in followups
+    ]
+    st.dataframe(display_rows, use_container_width=True, hide_index=True)
+
+    # Action section for scheduled follow-ups
+    actionable = [f for f in followups if f["status"] == "scheduled"]
+    if not actionable:
+        return
+
+    st.markdown("### 📝 Record Follow-up Outcome")
+
+    fu_options = {f"{f['patient_name']} — Due: {f['follow_up_date']}": f for f in actionable}
+    selected_label = st.selectbox("Select Follow-up", list(fu_options.keys()))
+    if not selected_label:
+        return
+
+    fu_data = fu_options[selected_label]
+    fu_id = fu_data["followup_id"]
+
+    # Show context
+    if fu_data["has_referral"]:
+        st.info(
+            f"**Referral:** {fu_data['referral_id']} → {fu_data['referral_destination']} | "
+            f"Status: {fu_data['referral_status']} | "
+            f"Appointment: {fu_data['referral_appointment'] or 'Not scheduled'}"
+        )
+
+    outcome_options = [
+        "CONTACTED", "PATIENT_ATTENDED", "PATIENT_DID_NOT_ATTEND",
+        "RESCHEDULE_REQUIRED", "REPORT_PENDING", "PATIENT_UNAVAILABLE",
+    ]
+    selected_outcome = st.selectbox("Worker Outcome", outcome_options)
+    outcome_notes = st.text_area("Notes (optional)", placeholder="Any observations...")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("✅ Record Outcome", use_container_width=True):
+            result = WorkerService.record_worker_outcome(db, user_data, fu_id, selected_outcome, outcome_notes)
+            if result.get("success"):
+                st.success(result["message"])
+                st.rerun()
+            else:
+                st.error(result.get("error", "Failed."))
+    with c2:
+        if st.button("🔴 Escalate to Healthcare", use_container_width=True):
+            esc_reason = outcome_notes or f"Follow-up requires healthcare attention. Outcome: {selected_outcome}"
+            result = WorkerService.escalate_followup(db, user_data, fu_id, esc_reason)
+            if result.get("success"):
+                st.success(result["message"])
+                st.rerun()
+            else:
+                st.error(result.get("error", "Failed."))
+    with c3:
+        if fu_data["is_overdue"] or True:
+            if st.button("📎 Collect Report", use_container_width=True):
+                st.info("Report collection feature — upload via Case Intake page for the relevant visit.")
 
 
 def show_worker_referrals(db, facility_info):
-    """Worker referral view page."""
+    """Worker referral view page with follow-up status."""
     st.markdown("## 🔄 Referrals")
     _render_workflow_trail(WORKER_WORKFLOW, "referrals")
 
@@ -2901,13 +3166,13 @@ def show_worker_referrals(db, facility_info):
                 "Department": r["department"],
                 "Status": r["status"],
                 "Urgency": r["urgency"],
+                "Follow-up": r.get("followup_status") or "",
                 "Date": r["created_at"],
             }
             for r in referrals
         ]
         st.dataframe(display_rows, use_container_width=True, hide_index=True)
 
-        # Show details for selected referral
         st.markdown("### Referral Details")
         ref_ids = [r["referral_id"] for r in referrals]
         selected_ref = st.selectbox("Select Referral", ref_ids)
@@ -2924,64 +3189,12 @@ def show_worker_referrals(db, facility_info):
                     st.markdown(f"**Reason:** {ref_detail['reason']}")
                     if ref_detail.get("appointment_date"):
                         st.markdown(f"**Appointment:** {ref_detail['appointment_date']}")
+                    if ref_detail.get("has_followup"):
+                        st.markdown(f"**Follow-up Status:** {ref_detail['followup_status']}")
+                    else:
+                        st.caption("No follow-up scheduled yet.")
     else:
         st.info("No referrals found for your facility.")
-
-
-def show_worker_followups(db, facility_info):
-    """Worker follow-up support page."""
-    st.markdown("## 📅 Follow-ups")
-    _render_workflow_trail(WORKER_WORKFLOW, "followups")
-
-    user_data = st.session_state.user_data or {}
-
-    st.info("View and update follow-up status for patients you are assisting.")
-
-    followups = WorkerService.get_facility_followups(db, user_data)
-
-    if followups:
-        display_rows = [
-            {
-                "Patient": f["patient_name"],
-                "Patient ID": f["patient_id"],
-                "Follow-up Date": f["follow_up_date"],
-                "Reason": f["reason"],
-                "Status": f["status"],
-                "Visit": f["visit_id"],
-            }
-            for f in followups
-        ]
-        st.dataframe(display_rows, use_container_width=True, hide_index=True)
-
-        # Update follow-up status
-        st.markdown("### Update Follow-up Status")
-        scheduled = [f for f in followups if f["status"] == "scheduled"]
-        if scheduled:
-            fu_options = {f"{f['patient_name']} — {f['follow_up_date']}": f["followup_id"] for f in scheduled}
-            selected_fu = st.selectbox("Select Follow-up", list(fu_options.keys()))
-            if selected_fu:
-                fu_id = fu_options[selected_fu]
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("✅ Mark Completed", use_container_width=True):
-                        result = WorkerService.update_followup_status(db, user_data, fu_id, "completed")
-                        if result.get("success"):
-                            st.success(result["message"])
-                            st.rerun()
-                        else:
-                            st.error(result.get("error", "Update failed."))
-                with col2:
-                    if st.button("❌ Mark Missed", use_container_width=True):
-                        result = WorkerService.update_followup_status(db, user_data, fu_id, "missed")
-                        if result.get("success"):
-                            st.success(result["message"])
-                            st.rerun()
-                        else:
-                            st.error(result.get("error", "Update failed."))
-        else:
-            st.info("No scheduled follow-ups to update.")
-    else:
-        st.info("No follow-ups found for your facility.")
 
 
 def show_worker_workspace(db):
@@ -2998,10 +3211,10 @@ def show_worker_workspace(db):
         show_worker_register(db, facility_info)
     elif nav == "Case Intake":
         show_worker_case_intake(db, facility_info)
-    elif nav == "Referrals":
-        show_worker_referrals(db, facility_info)
     elif nav == "Follow-ups":
         show_worker_followups(db, facility_info)
+    elif nav == "Referrals":
+        show_worker_referrals(db, facility_info)
     else:
         show_worker_dashboard(db, facility_info)
 
