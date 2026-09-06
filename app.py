@@ -10,7 +10,8 @@ import streamlit as st
 from database.db import init_db, get_session
 from database.models import (
     User, Doctor, Patient, Visit, Token, TokenStatus, Facility, Department,
-    Referral, ReferralDataPackage, Prescription, DoctorNote, FollowUp, PatientCase, MedicalDocument
+    Referral, ReferralDataPackage, Prescription, DoctorNote, FollowUp, PatientCase, MedicalDocument,
+    UserRole,
 )
 from services.auth_service import AuthService
 from services.dashboard_service import DashboardService
@@ -27,7 +28,7 @@ from services.referral_service import ReferralService
 from services.patient_history_service import PatientHistoryService
 from services.management_service import ManagementService
 from services.session_service import AuthSessionService, normalize_role
-from services.navigation import DOCTOR_WORKFLOW, RECEPTIONIST_WORKFLOW, trail_text_with_current
+from services.navigation import DOCTOR_WORKFLOW, RECEPTIONIST_WORKFLOW, HOSPITAL_ADMIN_WORKFLOW, trail_text_with_current
 from services.ui_helpers import set_page_style
 from services.authorization import get_facility_id as _get_facility_id_from_session
 
@@ -68,6 +69,8 @@ if "patient_portal_id" not in st.session_state:
     st.session_state.patient_portal_id = None
 if "patient_workflow_stage" not in st.session_state:
     st.session_state.patient_workflow_stage = "search"
+if "hospital_admin_nav" not in st.session_state:
+    st.session_state.hospital_admin_nav = "Dashboard"
 
 # Apply UI styles and ensure database tables exist
 set_page_style()
@@ -117,6 +120,8 @@ def _set_clean_nav(role: str):
         st.session_state.receptionist_nav = "Dashboard"
     elif role_clean == "doctor":
         st.session_state.doctor_nav = "My Queue"
+    elif role_clean == "hospital_admin":
+        st.session_state.hospital_admin_nav = "Dashboard"
 
 
 def _render_workflow_trail(workflow, step_key: str):
@@ -257,6 +262,28 @@ def show_login_page(db):
                 else:
                     st.error("Demo account unavailable. Please check seed data.")
             st.caption("User: `drgupta` | Pass: `password123`")
+
+        st.markdown("---")
+        st.markdown("##### 🏥 Hospital Admin Accounts")
+        c6, c7 = st.columns(2)
+        with c6:
+            if st.button("Hospital Admin A\n(Rural Health Center — Thane)", use_container_width=True):
+                auth = AuthService.authenticate(db, "admin_a", "password123")
+                if auth:
+                    _establish_session(auth_result=auth)
+                    st.rerun()
+                else:
+                    st.error("Demo account unavailable. Please check seed data.")
+            st.caption("User: `admin_a` | Pass: `password123`")
+        with c7:
+            if st.button("Hospital Admin B\n(District General Hospital — Pune)", use_container_width=True):
+                auth = AuthService.authenticate(db, "admin_b", "password123")
+                if auth:
+                    _establish_session(auth_result=auth)
+                    st.rerun()
+                else:
+                    st.error("Demo account unavailable. Please check seed data.")
+            st.caption("User: `admin_b` | Pass: `password123`")
 
 
 # ==============================================================================
@@ -1101,6 +1128,455 @@ def show_receptionist_referrals(db, facility_info):
                     st.markdown("---")
         else:
             st.info("No outgoing referrals created from this facility yet.")
+
+
+# ==============================================================================
+# SECTION 2B: HOSPITAL ADMIN WORKSPACE
+# Navigation: Dashboard | Staff Management | Departments | Hospital Profile
+# ==============================================================================
+
+def render_hospital_admin_sidebar(facility_info: dict) -> str:
+    """Render hospital admin navigation sidebar."""
+    st.sidebar.markdown("### MED-SETU")
+    st.sidebar.markdown("**🏥 Hospital Administration**")
+    st.sidebar.markdown("---")
+
+    nav_options = ["🏠 Dashboard", "👨‍⚕️ Doctors", "👩‍💼 Receptionists", "🏢 Departments", "🏥 Hospital Profile"]
+    current_nav_index = 0
+    clean_current = st.session_state.hospital_admin_nav
+    for i, opt in enumerate(nav_options):
+        if clean_current in opt:
+            current_nav_index = i
+            break
+
+    nav = st.sidebar.radio(
+        "Hospital Admin Navigation",
+        nav_options,
+        index=current_nav_index,
+        label_visibility="collapsed"
+    )
+    if "Dashboard" in nav:
+        clean_nav = "Dashboard"
+    elif "Doctor" in nav:
+        clean_nav = "Doctors"
+    elif "Receptionist" in nav:
+        clean_nav = "Receptionists"
+    elif "Department" in nav:
+        clean_nav = "Departments"
+    elif "Profile" in nav:
+        clean_nav = "Hospital Profile"
+    else:
+        clean_nav = "Dashboard"
+
+    st.session_state.hospital_admin_nav = clean_nav
+
+    if st.sidebar.button("🚪 Logout", use_container_width=True, key="ha_logout_btn"):
+        AuthSessionService.logout()
+        st.rerun()
+
+    st.sidebar.markdown("---")
+    if facility_info:
+        st.sidebar.markdown(f"**{facility_info.get('name', 'Hospital')}**")
+        st.sidebar.caption(f"📍 District: {facility_info.get('district', 'N/A')}")
+        st.sidebar.caption(f"🏥 Type: {facility_info.get('facility_type', 'Hospital')}")
+
+    return clean_nav
+
+
+def show_hospital_admin_dashboard(db):
+    """Hospital Admin: Facility-scoped KPI dashboard."""
+    user_data = st.session_state.user_data or {}
+    facility_info = user_data.get("facility") or DashboardService.get_facility_info(db)
+    fac_name = facility_info.get("name", "Healthcare Facility") if facility_info else "Healthcare Facility"
+    nav = render_hospital_admin_sidebar(facility_info)
+
+    if nav == "Dashboard":
+        show_ha_overview(db, facility_info, fac_name)
+    elif nav == "Doctors":
+        show_ha_doctors(db, facility_info, fac_name)
+    elif nav == "Receptionists":
+        show_ha_receptionists(db, facility_info, fac_name)
+    elif nav == "Departments":
+        show_ha_departments(db, facility_info, fac_name)
+    elif nav == "Hospital Profile":
+        show_ha_hospital_profile(db, facility_info, fac_name)
+    else:
+        show_ha_overview(db, facility_info, fac_name)
+
+
+def show_ha_overview(db, facility_info, fac_name):
+    """Hospital Admin dashboard with facility-scoped KPIs."""
+    st.markdown(f"## 🏠 Hospital Admin Dashboard — {fac_name}")
+    _render_workflow_trail(HOSPITAL_ADMIN_WORKFLOW, "dashboard")
+
+    user_data = st.session_state.user_data or {}
+    fid = _current_facility_id()
+    kpis = DashboardService.get_kpi_counts(db, facility_id=fid)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Today's Patients", kpis.get("total_patients", 0))
+    with c2:
+        st.metric("Waiting in Queue", kpis.get("waiting", 0))
+    with c3:
+        st.metric("Completed", kpis.get("completed", 0))
+    with c4:
+        dept_count = db.query(Department).filter(Department.facility_id == fid).count() if fid else db.query(Department).count()
+        st.metric("Departments", dept_count)
+
+    c5, c6, c7, c8 = st.columns(4)
+    with c5:
+        doc_count = db.query(Doctor).filter(Doctor.facility_id == fid, Doctor.is_available == True).count() if fid else db.query(Doctor).filter(Doctor.is_available == True).count()
+        st.metric("Active Doctors", doc_count)
+    with c6:
+        rec_count = db.query(User).filter(User.facility_id == fid, User.role == UserRole.RECEPTIONIST, User.is_active == True).count() if fid else 0
+        st.metric("Receptionists", rec_count)
+    with c7:
+        st.metric("Referrals Sent", kpis.get("total_referrals", 0))
+    with c8:
+        st.metric("Referrals Received", kpis.get("referrals_received", 0))
+
+    st.markdown("---")
+
+    c_btn1, c_btn2, c_btn3, c_btn4 = st.columns(4)
+    with c_btn1:
+        if st.button("👨‍⚕️ Manage Doctors", use_container_width=True):
+            st.session_state.hospital_admin_nav = "Doctors"
+            st.rerun()
+    with c_btn2:
+        if st.button("👩‍💼 Manage Receptionists", use_container_width=True):
+            st.session_state.hospital_admin_nav = "Receptionists"
+            st.rerun()
+    with c_btn3:
+        if st.button("🏢 View Departments", use_container_width=True):
+            st.session_state.hospital_admin_nav = "Departments"
+            st.rerun()
+    with c_btn4:
+        if st.button("🏥 Hospital Profile", use_container_width=True):
+            st.session_state.hospital_admin_nav = "Hospital Profile"
+            st.rerun()
+
+    st.markdown("### 📋 Recent Activity")
+    recent_visits = ManagementService.get_recent_visits(db, limit=15, user_data=user_data)
+    if recent_visits:
+        st.dataframe(recent_visits, use_container_width=True, hide_index=True)
+    else:
+        st.info("No recent activity at this facility.")
+
+
+def show_ha_doctors(db, facility_info, fac_name):
+    """Hospital Admin: Doctor management — list, search, add, edit, deactivate."""
+    st.markdown(f"## 👨‍⚕️ Doctor Management — {fac_name}")
+    _render_workflow_trail(HOSPITAL_ADMIN_WORKFLOW, "doctors")
+
+    user_data = st.session_state.user_data or {}
+    fid = _current_facility_id()
+    staff_list = ManagementService.get_all_staff(db, user_data=user_data)
+    doctors = [s for s in staff_list if s["role"] == "doctor"]
+
+    st.markdown(f"**Total Doctors:** {len(doctors)}")
+
+    st.markdown("---")
+    t_list, t_add = st.tabs(["📋 Doctor Directory", "➕ Add New Doctor"])
+
+    with t_list:
+        search_q = st.text_input("🔍 Search doctors by name or username", placeholder="Type to filter...", key="ha_doc_search")
+        filtered = doctors
+        if search_q:
+            sq = search_q.lower()
+            filtered = [d for d in doctors if sq in d["full_name"].lower() or sq in d["username"].lower() or sq in d.get("specialization", "").lower()]
+
+        if filtered:
+            st.dataframe(filtered, use_container_width=True, hide_index=True)
+        else:
+            st.info("No doctors found matching your search.")
+
+        st.markdown("---")
+        st.markdown("##### Edit / Deactivate Doctor")
+        if not doctors:
+            st.info("No doctors to manage.")
+        else:
+            doc_map = {f"{d['full_name']} ({d['username']})": d for d in doctors}
+            sel_label = st.selectbox("Select Doctor", list(doc_map.keys()), key="ha_sel_doc")
+            sel_doc = doc_map[sel_label]
+
+            with st.expander(f"✏️ Edit {sel_doc['full_name']}", expanded=False):
+                departments = ManagementService.get_facility_departments(db, fid)
+                dept_names = [d["name"] for d in departments]
+                dept_map = {d["name"]: d["id"] for d in departments}
+
+                with st.form(key=f"form_edit_doc_{sel_doc['id']}"):
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        edit_name = st.text_input("Full Name", value=sel_doc["full_name"])
+                    with ec2:
+                        edit_spec = st.text_input("Specialization", value=sel_doc.get("specialization", ""))
+                    edit_dept = st.selectbox("Department", dept_names if dept_names else ["No departments"],
+                                             index=dept_names.index(next((d["name"] for d in departments if d["name"] == sel_doc.get("specialization")), dept_names[0])) if dept_names else 0,
+                                             key=f"edit_doc_dept_{sel_doc['id']}")
+                    save_edit = st.form_submit_button("Save Changes", use_container_width=True)
+                    if save_edit:
+                        dept_id = dept_map.get(edit_dept)
+                        res = ManagementService.edit_doctor(db, user_data, sel_doc["id"], full_name=edit_name, specialization=edit_spec, department_id=dept_id)
+                        if res["success"]:
+                            st.success(res["message"])
+                            st.rerun()
+                        else:
+                            st.error(res.get("error", "Failed."))
+
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                if sel_doc["is_active"]:
+                    if st.button("⏸️ Deactivate Doctor", key="ha_deact_doc", use_container_width=True):
+                        res = ManagementService.deactivate_staff(db, sel_doc["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", user_data=user_data)
+                        if res["success"]:
+                            st.success(res["message"])
+                            st.rerun()
+                        else:
+                            st.error(res.get("error", "Failed."))
+            with mc2:
+                if not sel_doc["is_active"]:
+                    if st.button("▶️ Reactivate Doctor", key="ha_react_doc", use_container_width=True):
+                        res = ManagementService.reactivate_staff(db, sel_doc["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", user_data=user_data)
+                        if res["success"]:
+                            st.success(res["message"])
+                            st.rerun()
+                        else:
+                            st.error(res.get("error", "Failed."))
+
+    with t_add:
+        st.markdown("##### Add New Doctor")
+        departments = ManagementService.get_facility_departments(db, fid)
+        dept_names = [d["name"] for d in departments]
+        dept_map = {d["name"]: d["id"] for d in departments}
+
+        with st.form(key="form_add_doctor"):
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                new_name = st.text_input("Full Name *", placeholder="e.g. Dr. Rajesh Kumar")
+                new_username = st.text_input("Username *", placeholder="e.g. drkumar")
+            with fc2:
+                new_password = st.text_input("Password *", value="password123", type="password")
+                new_dept = st.selectbox("Department *", dept_names if dept_names else ["No departments configured"])
+                new_spec = st.text_input("Specialization *", placeholder="e.g. General Medicine")
+
+            submit_doc = st.form_submit_button("✅ Create Doctor", use_container_width=True, type="primary")
+            if submit_doc:
+                if not new_name.strip() or not new_username.strip() or not new_password.strip():
+                    st.error("All fields are required.")
+                elif not dept_names or not new_spec.strip():
+                    st.error("Department and specialization are required.")
+                else:
+                    dept_id = dept_map.get(new_dept)
+                    res = ManagementService.create_doctor(db, user_data, new_name, new_username, new_password, dept_id, new_spec)
+                    if res["success"]:
+                        st.success(res["message"])
+                        st.rerun()
+                    else:
+                        st.error(res.get("error", "Failed to create doctor."))
+
+
+def show_ha_receptionists(db, facility_info, fac_name):
+    """Hospital Admin: Receptionist management — list, search, add, deactivate."""
+    st.markdown(f"## 👩‍💼 Receptionist Management — {fac_name}")
+    _render_workflow_trail(HOSPITAL_ADMIN_WORKFLOW, "receptionists")
+
+    user_data = st.session_state.user_data or {}
+    staff_list = ManagementService.get_all_staff(db, user_data=user_data)
+    receptionists = [s for s in staff_list if s["role"] == "receptionist"]
+
+    st.markdown(f"**Total Receptionists:** {len(receptionists)}")
+
+    st.markdown("---")
+    t_list, t_add = st.tabs(["📋 Receptionist Directory", "➕ Add New Receptionist"])
+
+    with t_list:
+        search_q = st.text_input("🔍 Search receptionists by name or username", placeholder="Type to filter...", key="ha_rec_search")
+        filtered = receptionists
+        if search_q:
+            sq = search_q.lower()
+            filtered = [r for r in receptionists if sq in r["full_name"].lower() or sq in r["username"].lower()]
+
+        if filtered:
+            st.dataframe(filtered, use_container_width=True, hide_index=True)
+        else:
+            st.info("No receptionists found matching your search.")
+
+        st.markdown("---")
+        st.markdown("##### Deactivate / Reactivate Receptionist")
+        if not receptionists:
+            st.info("No receptionists to manage.")
+        else:
+            rec_map = {f"{r['full_name']} ({r['username']})": r for r in receptionists}
+            sel_label = st.selectbox("Select Receptionist", list(rec_map.keys()), key="ha_sel_rec")
+            sel_rec = rec_map[sel_label]
+
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                if sel_rec["is_active"]:
+                    if st.button("⏸️ Deactivate Receptionist", key="ha_deact_rec", use_container_width=True):
+                        res = ManagementService.deactivate_staff(db, sel_rec["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", user_data=user_data)
+                        if res["success"]:
+                            st.success(res["message"])
+                            st.rerun()
+                        else:
+                            st.error(res.get("error", "Failed."))
+            with mc2:
+                if not sel_rec["is_active"]:
+                    if st.button("▶️ Reactivate Receptionist", key="ha_react_rec", use_container_width=True):
+                        res = ManagementService.reactivate_staff(db, sel_rec["id"], requester_role=normalize_role(st.session_state.get("user_role")) or "hospital_admin", user_data=user_data)
+                        if res["success"]:
+                            st.success(res["message"])
+                            st.rerun()
+                        else:
+                            st.error(res.get("error", "Failed."))
+
+    with t_add:
+        st.markdown("##### Add New Receptionist")
+        with st.form(key="form_add_receptionist"):
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                new_name = st.text_input("Full Name *", placeholder="e.g. Priya Patil")
+                new_username = st.text_input("Username *", placeholder="e.g. priya")
+            with fc2:
+                new_password = st.text_input("Password *", value="password123", type="password")
+
+            submit_rec = st.form_submit_button("✅ Create Receptionist", use_container_width=True, type="primary")
+            if submit_rec:
+                if not new_name.strip() or not new_username.strip() or not new_password.strip():
+                    st.error("All fields are required.")
+                else:
+                    res = ManagementService.create_receptionist(db, user_data, new_name, new_username, new_password)
+                    if res["success"]:
+                        st.success(res["message"])
+                        st.rerun()
+                    else:
+                        st.error(res.get("error", "Failed to create receptionist."))
+
+
+def show_ha_departments(db, facility_info, fac_name):
+    """Hospital Admin: Department list, add, edit, deactivate."""
+    st.markdown(f"## 🏢 Departments — {fac_name}")
+    _render_workflow_trail(HOSPITAL_ADMIN_WORKFLOW, "departments")
+
+    user_data = st.session_state.user_data or {}
+    fid = _current_facility_id()
+    departments = ManagementService.get_facility_departments(db, fid)
+
+    st.markdown(f"**Total Departments:** {len(departments)}")
+    if departments:
+        st.dataframe(departments, use_container_width=True, hide_index=True)
+    else:
+        st.info("No departments configured for this facility.")
+
+    st.markdown("---")
+    t_add, t_manage = st.tabs(["➕ Add Department", "⚙️ Manage Departments"])
+
+    with t_add:
+        st.markdown("##### Add New Department")
+        with st.form(key="form_add_dept"):
+            dept_name = st.text_input("Department Name *", placeholder="e.g. Radiology")
+            submit_dept = st.form_submit_button("✅ Create Department", use_container_width=True, type="primary")
+            if submit_dept:
+                if not dept_name.strip():
+                    st.error("Department name is required.")
+                else:
+                    res = ManagementService.create_department(db, user_data, dept_name)
+                    if res["success"]:
+                        st.success(res["message"])
+                        st.rerun()
+                    else:
+                        st.error(res.get("error", "Failed to create department."))
+
+    with t_manage:
+        if not departments:
+            st.info("No departments to manage.")
+        else:
+            dept_map = {f"{d['name']} ({d['doctor_count']} doctors)": d for d in departments}
+            sel_label = st.selectbox("Select Department", list(dept_map.keys()), key="ha_sel_dept")
+            sel_dept = dept_map[sel_label]
+
+            with st.expander(f"✏️ Edit Department: {sel_dept['name']}", expanded=False):
+                with st.form(key=f"form_edit_dept_{sel_dept['id']}"):
+                    new_name = st.text_input("Department Name *", value=sel_dept["name"])
+                    save_edit = st.form_submit_button("Save Changes", use_container_width=True)
+                    if save_edit:
+                        res = ManagementService.edit_department(db, user_data, sel_dept["id"], new_name)
+                        if res["success"]:
+                            st.success(res["message"])
+                            st.rerun()
+                        else:
+                            st.error(res.get("error", "Failed."))
+
+            if sel_dept["doctor_count"] == 0:
+                if st.button("🗑️ Remove Empty Department", key="ha_del_dept", use_container_width=True):
+                    res = ManagementService.deactivate_department(db, user_data, sel_dept["id"])
+                    if res["success"]:
+                        st.success(res["message"])
+                        st.rerun()
+                    else:
+                        st.error(res.get("error", "Failed."))
+            else:
+                st.caption(f"Department has {sel_dept['doctor_count']} active doctor(s). Reassign or deactivate doctors before removing.")
+
+
+def show_ha_hospital_profile(db, facility_info, fac_name):
+    """Hospital Admin: Facility profile view and edit."""
+    st.markdown(f"## 🏥 Hospital Profile — {fac_name}")
+    _render_workflow_trail(HOSPITAL_ADMIN_WORKFLOW, "profile")
+
+    user_data = st.session_state.user_data or {}
+    fid = _current_facility_id()
+    profile = ManagementService.get_facility_profile(db, fid)
+
+    if not profile:
+        st.error("Facility profile not found.")
+        return
+
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        st.markdown(f"**Name:** {profile['name']}")
+        st.markdown(f"**Type:** {profile['facility_type']}")
+        st.markdown(f"**District:** {profile['district']}")
+    with pc2:
+        st.markdown(f"**Address:** {profile['address']}")
+        st.markdown(f"**Phone:** {profile['phone']}")
+        status = "🟢 Active" if profile["is_active"] else "🔴 Inactive"
+        st.markdown(f"**Status:** {status}")
+
+    st.markdown("---")
+    kc1, kc2, kc3, kc4 = st.columns(4)
+    with kc1:
+        st.metric("Departments", profile["department_count"])
+    with kc2:
+        st.metric("Doctors", profile["doctor_count"])
+    with kc3:
+        st.metric("Total Visits", profile["visit_count"])
+    with kc4:
+        st.metric("Facility ID", profile["id"])
+
+    st.markdown("---")
+    with st.expander("✏️ Edit Hospital Profile", expanded=False):
+        with st.form(key="form_edit_facility"):
+            ef1, ef2 = st.columns(2)
+            with ef1:
+                edit_name = st.text_input("Hospital Name *", value=profile["name"])
+                edit_district = st.text_input("District / City *", value=profile["district"])
+            with ef2:
+                edit_address = st.text_input("Address *", value=profile["address"])
+                edit_phone = st.text_input("Phone *", value=profile["phone"])
+
+            save_profile = st.form_submit_button("💾 Save Profile Changes", use_container_width=True, type="primary")
+            if save_profile:
+                if not edit_name.strip() or not edit_district.strip() or not edit_address.strip() or not edit_phone.strip():
+                    st.error("All fields are required.")
+                else:
+                    res = ManagementService.edit_facility_profile(db, user_data, name=edit_name, address=edit_address, phone=edit_phone, district=edit_district)
+                    if res["success"]:
+                        st.success(res["message"])
+                        st.rerun()
+                    else:
+                        st.error(res.get("error", "Failed."))
 
 
 # ==============================================================================
@@ -2051,6 +2527,8 @@ def main():
             _safe_render("Doctor", show_doctor_dashboard, db)
         elif role == "patient":
             _safe_render("Patient Portal", show_patient_portal_page, db)
+        elif role == "hospital_admin":
+            _safe_render("Hospital Admin", show_hospital_admin_dashboard, db)
         else:
             show_login_page(db)
     finally:

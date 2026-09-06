@@ -23,9 +23,18 @@ RECEPTIONIST_WORKFLOW = [
     ("Referrals", "referrals"),
 ]
 
+HOSPITAL_ADMIN_WORKFLOW = [
+    ("Dashboard", "dashboard"),
+    ("Doctors", "doctors"),
+    ("Receptionists", "receptionists"),
+    ("Departments", "departments"),
+    ("Hospital Profile", "profile"),
+]
+
 WORKFLOWS = {
     "doctor": DOCTOR_WORKFLOW,
     "receptionist": RECEPTIONIST_WORKFLOW,
+    "hospital_admin": HOSPITAL_ADMIN_WORKFLOW,
 }
 
 

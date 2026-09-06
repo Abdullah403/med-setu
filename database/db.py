@@ -67,9 +67,59 @@ def init_db():
     # Seed database if empty
     from database.seed_data import seed_database
     seed_database()
+    # Ensure Hospital Admin demo accounts exist (safe for existing DBs)
+    _ensure_admin_accounts()
 
 
 def get_session() -> Session:
     """Get a new database session"""
     _ensure_migrations_once()
     return SessionLocal()
+
+
+def _ensure_admin_accounts():
+    """Add Hospital Admin demo accounts if they don't exist.
+
+    Safe to call on existing databases — only inserts missing accounts.
+    Does not modify or delete any existing records.
+    """
+    from database.models import User, Facility, UserRole
+    from database.seed_data import hash_password
+
+    db = SessionLocal()
+    try:
+        # Facility A admin
+        fac_a = db.query(Facility).filter(Facility.name.like("%Rural%")).first()
+        if fac_a:
+            existing_a = db.query(User).filter(User.username == "admin_a").first()
+            if not existing_a:
+                admin_a = User(
+                    username="admin_a",
+                    password_hash=hash_password("password123"),
+                    role=UserRole.HOSPITAL_ADMIN,
+                    full_name="Hospital Admin A",
+                    facility_id=fac_a.id,
+                    is_active=True,
+                )
+                db.add(admin_a)
+
+        # Facility B admin
+        fac_b = db.query(Facility).filter(Facility.name.like("%District%")).first()
+        if fac_b:
+            existing_b = db.query(User).filter(User.username == "admin_b").first()
+            if not existing_b:
+                admin_b = User(
+                    username="admin_b",
+                    password_hash=hash_password("password123"),
+                    role=UserRole.HOSPITAL_ADMIN,
+                    full_name="Hospital Admin B",
+                    facility_id=fac_b.id,
+                    is_active=True,
+                )
+                db.add(admin_b)
+
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
