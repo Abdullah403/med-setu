@@ -38,11 +38,22 @@ GOVERNMENT_ADMIN_WORKFLOW = [
     ("Network Overview", "network"),
 ]
 
+WORKER_WORKFLOW = [
+    ("Dashboard", "dashboard"),
+    ("Patients", "patients"),
+    ("Register / Assist Patient", "register"),
+    ("Case Intake", "intake"),
+    ("Referrals", "referrals"),
+    ("Follow-ups", "followups"),
+]
+
 WORKFLOWS = {
     "doctor": DOCTOR_WORKFLOW,
     "receptionist": RECEPTIONIST_WORKFLOW,
     "hospital_admin": HOSPITAL_ADMIN_WORKFLOW,
     "government_admin": GOVERNMENT_ADMIN_WORKFLOW,
+    "asha_worker": WORKER_WORKFLOW,
+    "anganwadi_worker": WORKER_WORKFLOW,
 }
 
 

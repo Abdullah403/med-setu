@@ -20,6 +20,10 @@ from services.session_service import normalize_role, denial
 
 GLOBAL_ROLES: Set[str] = {"government_admin", "government", "super_admin", "admin"}
 
+# ── Assisted-access frontline worker roles (facility-scoped) ──
+
+WORKER_ROLES: Set[str] = {"asha_worker", "anganwadi_worker"}
+
 
 def get_facility_id(user_data: Optional[dict]) -> Optional[int]:
     """Extract the facility_id from the authenticated session user_data dict.

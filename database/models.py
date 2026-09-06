@@ -17,6 +17,8 @@ class UserRole(str, enum.Enum):
     DOCTOR = "doctor"
     HOSPITAL_ADMIN = "hospital_admin"
     GOVERNMENT_ADMIN = "government_admin"
+    ASHA_WORKER = "asha_worker"
+    ANGANWADI_WORKER = "anganwadi_worker"
 
 
 class UserRoleType(TypeDecorator):

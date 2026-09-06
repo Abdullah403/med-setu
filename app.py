@@ -27,6 +27,7 @@ from services.followup_service import FollowUpService
 from services.referral_service import ReferralService
 from services.patient_history_service import PatientHistoryService
 from services.management_service import ManagementService
+from services.worker_service import WorkerService
 from services.session_service import AuthSessionService, normalize_role
 from services.navigation import DOCTOR_WORKFLOW, RECEPTIONIST_WORKFLOW, HOSPITAL_ADMIN_WORKFLOW, GOVERNMENT_ADMIN_WORKFLOW, trail_text_with_current
 from services.ui_helpers import set_page_style
@@ -73,6 +74,8 @@ if "hospital_admin_nav" not in st.session_state:
     st.session_state.hospital_admin_nav = "Dashboard"
 if "government_admin_nav" not in st.session_state:
     st.session_state.government_admin_nav = "Dashboard"
+if "worker_nav" not in st.session_state:
+    st.session_state.worker_nav = "Dashboard"
 
 # Apply UI styles and ensure database tables exist
 set_page_style()
@@ -126,6 +129,8 @@ def _set_clean_nav(role: str):
         st.session_state.hospital_admin_nav = "Dashboard"
     elif role_clean == "government_admin":
         st.session_state.government_admin_nav = "Dashboard"
+    elif role_clean in ("asha_worker", "anganwadi_worker"):
+        st.session_state.worker_nav = "Dashboard"
 
 
 def _render_workflow_trail(workflow, step_key: str):
@@ -299,6 +304,28 @@ def show_login_page(db):
             else:
                 st.error("Demo account unavailable. Please check seed data.")
         st.caption("User: `gov_admin` | Pass: `password123`")
+
+        st.markdown("---")
+        st.markdown("##### 👩‍⚕️ ASHA / Anganwadi Worker Access")
+        c_asha, c_ang = st.columns(2)
+        with c_asha:
+            if st.button("ASHA Worker\n(Assisted Access — Thane)", use_container_width=True):
+                auth = AuthService.authenticate(db, "asha_demo", "password123")
+                if auth:
+                    _establish_session(auth_result=auth)
+                    st.rerun()
+                else:
+                    st.error("Demo account unavailable. Please check seed data.")
+            st.caption("User: `asha_demo` | Pass: `password123`")
+        with c_ang:
+            if st.button("Anganwadi Worker\n(Assisted Access — Pune)", use_container_width=True):
+                auth = AuthService.authenticate(db, "anganwadi_demo", "password123")
+                if auth:
+                    _establish_session(auth_result=auth)
+                    st.rerun()
+                else:
+                    st.error("Demo account unavailable. Please check seed data.")
+            st.caption("User: `anganwadi_demo` | Pass: `password123`")
 
 
 # ==============================================================================
@@ -2513,6 +2540,473 @@ def show_patient_portal_page(db):
 
 
 # ==============================================================================
+# SECTION 5A: ASHA / ANGANWADI WORKER WORKSPACE (Phase 3A)
+# Dashboard | Patients | Register / Assist Patient | Case Intake | Referrals | Follow-ups
+# ==============================================================================
+
+def render_worker_sidebar(facility_info: dict) -> str:
+    """Render worker navigation sidebar."""
+    st.sidebar.markdown("### MED-SETU")
+    st.sidebar.markdown("**👩‍⚕️ ASHA / Anganwadi Worker**")
+    st.sidebar.markdown("---")
+
+    nav_options = ["🏠 Dashboard", "👤 Patients", "📝 Register / Assist", "📋 Case Intake", "🔄 Referrals", "📅 Follow-ups"]
+    current_nav_index = 0
+    clean_current = st.session_state.worker_nav
+    for i, opt in enumerate(nav_options):
+        if clean_current in opt:
+            current_nav_index = i
+            break
+
+    nav = st.sidebar.radio(
+        "Worker Navigation",
+        nav_options,
+        index=current_nav_index,
+        label_visibility="collapsed"
+    )
+    if "Dashboard" in nav:
+        clean_nav = "Dashboard"
+    elif "Patient" in nav:
+        clean_nav = "Patients"
+    elif "Register" in nav:
+        clean_nav = "Register / Assist Patient"
+    elif "Case" in nav:
+        clean_nav = "Case Intake"
+    elif "Referral" in nav:
+        clean_nav = "Referrals"
+    elif "Follow" in nav:
+        clean_nav = "Follow-ups"
+    else:
+        clean_nav = "Dashboard"
+
+    st.session_state.worker_nav = clean_nav
+
+    if st.sidebar.button("🚪 Logout", use_container_width=True, key="worker_logout_btn"):
+        AuthSessionService.logout()
+        st.rerun()
+
+    st.sidebar.markdown("---")
+    if facility_info:
+        st.sidebar.markdown(f"**{facility_info.get('name', 'Facility')}**")
+        st.caption(f"📍 {facility_info.get('district', 'N/A')}")
+        st.caption(f"🏥 {facility_info.get('facility_type', 'N/A')}")
+
+    return clean_nav
+
+
+def show_worker_dashboard(db, facility_info):
+    """Worker dashboard: facility-scoped operational overview."""
+    fac_name = facility_info.get("name", "Facility") if facility_info else "Facility"
+    user_data = st.session_state.user_data or {}
+    role_label = "ASHA Worker" if "asha" in normalize_role(user_data.get("role", "")) else "Anganwadi Worker"
+
+    st.markdown(f"## 🏠 {role_label} Dashboard — {fac_name}")
+    _render_workflow_trail(WORKER_WORKFLOW, "dashboard")
+
+    stats = WorkerService.get_dashboard_stats(db, user_data)
+
+    if "error" in stats:
+        st.error(stats["error"])
+        return
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Patients Assisted Today", stats.get("patients_today", 0))
+    with c2:
+        st.metric("Pending Follow-ups", stats.get("pending_followups", 0))
+    with c3:
+        st.metric("Active Referrals", stats.get("active_referrals", 0))
+
+    st.markdown("---")
+
+    c_btn1, c_btn2 = st.columns(2)
+    with c_btn1:
+        if st.button("📝 Register / Assist New Patient", use_container_width=True):
+            st.session_state.worker_nav = "Register / Assist Patient"
+            st.rerun()
+    with c_btn2:
+        if st.button("📋 Begin Case Intake", use_container_width=True):
+            st.session_state.worker_nav = "Case Intake"
+            st.rerun()
+
+    st.markdown("### 📋 Recent Assisted Cases")
+    recent = stats.get("recent_cases", [])
+    if recent:
+        display_rows = [
+            {
+                "Visit ID": c["visit_id"],
+                "Patient": c["patient_name"],
+                "Patient ID": c["patient_id"],
+                "Chief Complaint": c["chief_complaint"],
+                "Status": c["status"],
+                "Date": c["date"],
+            }
+            for c in recent
+        ]
+        st.dataframe(display_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No assisted cases yet today.")
+
+
+def show_worker_patients(db, facility_info):
+    """Worker patient search page."""
+    st.markdown("## 👤 Patient Search")
+    _render_workflow_trail(WORKER_WORKFLOW, "patients")
+
+    user_data = st.session_state.user_data or {}
+
+    query = st.text_input(
+        "Search by Name, Phone Number, or Patient ID",
+        placeholder="e.g. Rahim or 9876543210 or PAT-00184",
+    )
+
+    if query:
+        results = WorkerService.search_patients(db, user_data, query)
+        if results:
+            st.markdown(f"Found **{len(results)}** matching patient(s):")
+            for p in results:
+                with st.container():
+                    cols = st.columns([3, 1, 1])
+                    with cols[0]:
+                        st.markdown(f"**{p.full_name}** ({p.patient_id})")
+                        st.caption(f"Age: {p.age} | Gender: {p.gender} | Phone: {p.phone} | Language: {p.preferred_language}")
+                    with cols[1]:
+                        if st.button("📋 Begin Intake", key=f"intake_{p.id}", use_container_width=True):
+                            st.session_state.worker_selected_patient_id = p.id
+                            st.session_state.worker_nav = "Case Intake"
+                            st.rerun()
+                    with cols[2]:
+                        if st.button("👤 View Details", key=f"detail_{p.id}", use_container_width=True):
+                            st.session_state.worker_viewing_patient_id = p.id
+                    st.markdown("---")
+
+            # Show patient details if viewing
+            if st.session_state.get("worker_viewing_patient_id"):
+                pid = st.session_state.worker_viewing_patient_id
+                details = WorkerService.get_patient_details(db, user_data, pid)
+                if details and details.get("success"):
+                    pat = details["patient"]
+                    st.info(
+                        f"**{pat['full_name']}** ({pat['patient_id']})\n\n"
+                        f"Age: {pat['age']} | Gender: {pat['gender']}\n\n"
+                        f"Phone: {pat['phone']} | Language: {pat['preferred_language']}"
+                    )
+                    if st.button("Close Details"):
+                        st.session_state.pop("worker_viewing_patient_id", None)
+                        st.rerun()
+        else:
+            st.warning("No patients found matching your search.")
+
+    if not query:
+        st.info("Enter a name, phone number, or patient ID to search.")
+
+
+def show_worker_register(db, facility_info):
+    """Worker register/assist new patient page."""
+    st.markdown("## 📝 Register / Assist New Patient")
+    _render_workflow_trail(WORKER_WORKFLOW, "register")
+
+    user_data = st.session_state.user_data or {}
+
+    st.info(
+        "**Assisted Registration:** Help the patient fill in their details below. "
+        "After registration, you can begin a case intake immediately."
+    )
+
+    with st.form("worker_register_patient"):
+        st.markdown("### Patient Information")
+        full_name = st.text_input("Full Name *", placeholder="e.g. Sunita Devi")
+        col1, col2 = st.columns(2)
+        with col1:
+            age = st.number_input("Age *", min_value=0, max_value=150, value=30)
+        with col2:
+            gender = st.selectbox("Gender *", ["Male", "Female", "Other"])
+        phone = st.text_input("Phone Number *", placeholder="10-digit mobile number")
+        language = st.selectbox("Preferred Language", ["Hindi", "English", "Marathi", "Tamil", "Telugu", "Bengali", "Kannada", "Other"])
+
+        submitted = st.form_submit_button("Register Patient", use_container_width=True)
+
+        if submitted:
+            if not full_name or not phone:
+                st.error("Please fill in all required fields (Name, Phone).")
+            else:
+                result = WorkerService.register_patient(
+                    db, user_data, full_name, age, gender, phone, language
+                )
+                if result.get("success"):
+                    patient = result["patient"]
+                    st.success(
+                        f"Patient **{patient.full_name}** ({patient.patient_id}) registered successfully!"
+                    )
+                    st.session_state.worker_selected_patient_id = patient.id
+                    if st.button("Begin Case Intake for This Patient"):
+                        st.session_state.worker_nav = "Case Intake"
+                        st.rerun()
+                else:
+                    st.error(result.get("error", "Registration failed."))
+
+
+def show_worker_case_intake(db, facility_info):
+    """Worker assisted case intake page."""
+    st.markdown("## 📋 Assisted Case Intake")
+    _render_workflow_trail(WORKER_WORKFLOW, "intake")
+
+    user_data = st.session_state.user_data or {}
+
+    st.warning(
+        "**Important:** Recorded information is patient-reported / worker-entered. "
+        "Clinical diagnosis and treatment remain the responsibility of a qualified healthcare professional."
+    )
+
+    # Patient selection
+    selected_patient_id = st.session_state.get("worker_selected_patient_id")
+    patient = None
+    if selected_patient_id:
+        patient = db.query(Patient).filter(Patient.id == selected_patient_id).first()
+
+    if not patient:
+        st.markdown("### Select Patient")
+        query = st.text_input("Search patient to begin intake", placeholder="Name, phone, or patient ID...")
+        if query:
+            results = WorkerService.search_patients(db, user_data, query)
+            if results:
+                options = {f"{p.full_name} ({p.patient_id})": p.id for p in results}
+                selected = st.selectbox("Select Patient", list(options.keys()))
+                if selected:
+                    st.session_state.worker_selected_patient_id = options[selected]
+                    st.rerun()
+            else:
+                st.warning("No patients found. Register the patient first.")
+        return
+
+    st.markdown(f"### Patient: **{patient.full_name}** ({patient.patient_id})")
+
+    # Department and doctor selection
+    departments = WorkerService.get_facility_departments(db, user_data)
+    if not departments:
+        st.error("No departments available at your facility.")
+        return
+
+    dept_options = {d.name: d.id for d in departments}
+    selected_dept = st.selectbox("Department *", list(dept_options.keys()))
+    dept_id = dept_options[selected_dept]
+
+    doctors = WorkerService.get_facility_doctors(db, user_data, dept_id)
+    if not doctors:
+        st.error("No available doctors in this department.")
+        return
+
+    doctor_options = {}
+    for d in doctors:
+        uname = d.user.full_name if d.user else "Unknown"
+        doctor_options[f"{uname} ({d.specialization})"] = d.id
+    selected_doc = st.selectbox("Assign Doctor *", list(doctor_options.keys()))
+    doctor_id = doctor_options[selected_doc]
+
+    st.markdown("---")
+
+    # Case intake form
+    with st.form("worker_case_intake"):
+        st.markdown("### Case Information (Patient-Reported)")
+        chief_complaint = st.text_area("Chief Complaint *", placeholder="What is the main problem? e.g. Fever, cough, headache...")
+        col1, col2 = st.columns(2)
+        with col1:
+            duration = st.text_input("Duration", placeholder="e.g. 3 days, 1 week")
+        with col2:
+            symptoms = st.text_area("Symptoms", placeholder="e.g. fever, body ache, nausea...")
+        additional_notes = st.text_area("Additional Notes", placeholder="Any other information the patient reported...")
+
+        st.markdown("---")
+        submitted = st.form_submit_button("Submit Case Intake", use_container_width=True)
+
+        if submitted:
+            if not chief_complaint:
+                st.error("Chief complaint is required.")
+            else:
+                result = WorkerService.create_assisted_intake(
+                    db, user_data, patient.id, dept_id, doctor_id,
+                    chief_complaint, duration, symptoms, additional_notes
+                )
+                if result.get("success"):
+                    st.success(result.get("message", "Case intake submitted."))
+                    st.session_state.pop("worker_selected_patient_id", None)
+                    if st.button("Attach Documents (Optional)"):
+                        st.session_state.worker_intake_visit_id = result["visit"].id
+                        st.session_state.worker_intake_patient_id = patient.id
+                        st.session_state.worker_nav = "Case Intake"
+                        st.rerun()
+                else:
+                    st.error(result.get("error", "Failed to create intake."))
+
+    # Document attachment section (if coming from successful intake)
+    visit_id = st.session_state.get("worker_intake_visit_id")
+    patient_id_for_doc = st.session_state.get("worker_intake_patient_id")
+    if visit_id and patient_id_for_doc:
+        st.markdown("---")
+        st.markdown("### 📎 Attach Documents (Optional)")
+        st.caption("Upload previous prescriptions, lab reports, discharge summaries, or other medical documents.")
+
+        uploaded_file = st.file_uploader(
+            "Choose file",
+            type=["pdf", "jpg", "jpeg", "png"],
+            key="worker_doc_upload",
+        )
+        if uploaded_file:
+            if st.button("Upload Document"):
+                result = WorkerService.attach_document(
+                    db, user_data, patient_id_for_doc, visit_id, uploaded_file, uploaded_file.name
+                )
+                if result.get("success"):
+                    st.success(f"Document **{uploaded_file.name}** uploaded successfully.")
+                    doc = result["document"]
+                    if doc.extracted_text:
+                        st.info(
+                            f"**Extracted Text (OCR):** This is machine-extracted text and is NOT medically verified.\n\n"
+                            f"{doc.extracted_text[:500]}..."
+                        )
+                else:
+                    st.error(result.get("error", "Upload failed."))
+
+        # Show existing documents
+        docs = WorkerService.get_documents_for_visit(db, user_data, patient_id_for_doc, visit_id)
+        if docs:
+            st.markdown("**Attached Documents:**")
+            for doc in docs:
+                st.markdown(f"- 📄 {doc.file_name} ({doc.file_type}) — {doc.created_at.strftime('%Y-%m-%d %H:%M')}")
+
+        if st.button("Done"):
+            st.session_state.pop("worker_intake_visit_id", None)
+            st.session_state.pop("worker_intake_patient_id", None)
+            st.rerun()
+
+
+def show_worker_referrals(db, facility_info):
+    """Worker referral view page."""
+    st.markdown("## 🔄 Referrals")
+    _render_workflow_trail(WORKER_WORKFLOW, "referrals")
+
+    user_data = st.session_state.user_data or {}
+
+    st.info("View facility-scoped referrals for patients you are assisting.")
+
+    referrals = WorkerService.get_facility_referrals(db, user_data)
+
+    if referrals:
+        display_rows = [
+            {
+                "Referral ID": r["referral_id"],
+                "Patient": r["patient_name"],
+                "Patient ID": r["patient_id"],
+                "Destination": r["receiving_facility"],
+                "Department": r["department"],
+                "Status": r["status"],
+                "Urgency": r["urgency"],
+                "Date": r["created_at"],
+            }
+            for r in referrals
+        ]
+        st.dataframe(display_rows, use_container_width=True, hide_index=True)
+
+        # Show details for selected referral
+        st.markdown("### Referral Details")
+        ref_ids = [r["referral_id"] for r in referrals]
+        selected_ref = st.selectbox("Select Referral", ref_ids)
+        if selected_ref:
+            ref_detail = next((r for r in referrals if r["referral_id"] == selected_ref), None)
+            if ref_detail:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"**Status:** {ref_detail['status']}")
+                    st.markdown(f"**Urgency:** {ref_detail['urgency']}")
+                    st.markdown(f"**Destination:** {ref_detail['receiving_facility']}")
+                    st.markdown(f"**Department:** {ref_detail['department']}")
+                with col2:
+                    st.markdown(f"**Reason:** {ref_detail['reason']}")
+                    if ref_detail.get("appointment_date"):
+                        st.markdown(f"**Appointment:** {ref_detail['appointment_date']}")
+    else:
+        st.info("No referrals found for your facility.")
+
+
+def show_worker_followups(db, facility_info):
+    """Worker follow-up support page."""
+    st.markdown("## 📅 Follow-ups")
+    _render_workflow_trail(WORKER_WORKFLOW, "followups")
+
+    user_data = st.session_state.user_data or {}
+
+    st.info("View and update follow-up status for patients you are assisting.")
+
+    followups = WorkerService.get_facility_followups(db, user_data)
+
+    if followups:
+        display_rows = [
+            {
+                "Patient": f["patient_name"],
+                "Patient ID": f["patient_id"],
+                "Follow-up Date": f["follow_up_date"],
+                "Reason": f["reason"],
+                "Status": f["status"],
+                "Visit": f["visit_id"],
+            }
+            for f in followups
+        ]
+        st.dataframe(display_rows, use_container_width=True, hide_index=True)
+
+        # Update follow-up status
+        st.markdown("### Update Follow-up Status")
+        scheduled = [f for f in followups if f["status"] == "scheduled"]
+        if scheduled:
+            fu_options = {f"{f['patient_name']} — {f['follow_up_date']}": f["followup_id"] for f in scheduled}
+            selected_fu = st.selectbox("Select Follow-up", list(fu_options.keys()))
+            if selected_fu:
+                fu_id = fu_options[selected_fu]
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Mark Completed", use_container_width=True):
+                        result = WorkerService.update_followup_status(db, user_data, fu_id, "completed")
+                        if result.get("success"):
+                            st.success(result["message"])
+                            st.rerun()
+                        else:
+                            st.error(result.get("error", "Update failed."))
+                with col2:
+                    if st.button("❌ Mark Missed", use_container_width=True):
+                        result = WorkerService.update_followup_status(db, user_data, fu_id, "missed")
+                        if result.get("success"):
+                            st.success(result["message"])
+                            st.rerun()
+                        else:
+                            st.error(result.get("error", "Update failed."))
+        else:
+            st.info("No scheduled follow-ups to update.")
+    else:
+        st.info("No follow-ups found for your facility.")
+
+
+def show_worker_workspace(db):
+    """Main worker router."""
+    user_data = st.session_state.user_data or {}
+    facility_info = user_data.get("facility") or DashboardService.get_facility_info(db)
+    nav = render_worker_sidebar(facility_info)
+
+    if nav == "Dashboard":
+        show_worker_dashboard(db, facility_info)
+    elif nav == "Patients":
+        show_worker_patients(db, facility_info)
+    elif nav == "Register / Assist Patient":
+        show_worker_register(db, facility_info)
+    elif nav == "Case Intake":
+        show_worker_case_intake(db, facility_info)
+    elif nav == "Referrals":
+        show_worker_referrals(db, facility_info)
+    elif nav == "Follow-ups":
+        show_worker_followups(db, facility_info)
+    else:
+        show_worker_dashboard(db, facility_info)
+
+
+# ==============================================================================
 # SECTION 6: GOVERNMENT / SUPER ADMIN WORKFLOW
 # Dashboard | Hospitals | Hospital Details | Network Overview | Logout
 # ==============================================================================
@@ -2909,6 +3403,8 @@ def main():
             _safe_render("Hospital Admin", show_hospital_admin_dashboard, db)
         elif role == "government_admin":
             _safe_render("Super Admin", show_government_admin_dashboard, db)
+        elif role in ("asha_worker", "anganwadi_worker"):
+            _safe_render("Worker", show_worker_workspace, db)
         else:
             show_login_page(db)
     finally:

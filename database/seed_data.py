@@ -404,6 +404,33 @@ def _ensure_admin_accounts(db: Session):
         )
         db.add(gov_admin)
 
+    # ── ASHA / Anganwadi Worker demo accounts (Phase 3A) ──
+    if fac_a:
+        existing_asha = db.query(User).filter(User.username == "asha_demo").first()
+        if not existing_asha:
+            asha_worker = User(
+                username="asha_demo",
+                password_hash=hash_password("password123"),
+                role=UserRole.ASHA_WORKER,
+                full_name="ASHA Worker Demo",
+                facility_id=fac_a.id,
+                is_active=True,
+            )
+            db.add(asha_worker)
+
+    if fac_b:
+        existing_ang = db.query(User).filter(User.username == "anganwadi_demo").first()
+        if not existing_ang:
+            anganwadi_worker = User(
+                username="anganwadi_demo",
+                password_hash=hash_password("password123"),
+                role=UserRole.ANGANWADI_WORKER,
+                full_name="Anganwadi Worker Demo",
+                facility_id=fac_b.id,
+                is_active=True,
+            )
+            db.add(anganwadi_worker)
+
 
 if __name__ == "__main__":
     print("Initializing database...")
