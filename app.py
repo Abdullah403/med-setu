@@ -28,7 +28,7 @@ from services.referral_service import ReferralService
 from services.patient_history_service import PatientHistoryService
 from services.management_service import ManagementService
 from services.session_service import AuthSessionService, normalize_role
-from services.navigation import DOCTOR_WORKFLOW, RECEPTIONIST_WORKFLOW, HOSPITAL_ADMIN_WORKFLOW, trail_text_with_current
+from services.navigation import DOCTOR_WORKFLOW, RECEPTIONIST_WORKFLOW, HOSPITAL_ADMIN_WORKFLOW, GOVERNMENT_ADMIN_WORKFLOW, trail_text_with_current
 from services.ui_helpers import set_page_style
 from services.authorization import get_facility_id as _get_facility_id_from_session
 
@@ -71,6 +71,8 @@ if "patient_workflow_stage" not in st.session_state:
     st.session_state.patient_workflow_stage = "search"
 if "hospital_admin_nav" not in st.session_state:
     st.session_state.hospital_admin_nav = "Dashboard"
+if "government_admin_nav" not in st.session_state:
+    st.session_state.government_admin_nav = "Dashboard"
 
 # Apply UI styles and ensure database tables exist
 set_page_style()
@@ -122,6 +124,8 @@ def _set_clean_nav(role: str):
         st.session_state.doctor_nav = "My Queue"
     elif role_clean == "hospital_admin":
         st.session_state.hospital_admin_nav = "Dashboard"
+    elif role_clean == "government_admin":
+        st.session_state.government_admin_nav = "Dashboard"
 
 
 def _render_workflow_trail(workflow, step_key: str):
@@ -284,6 +288,17 @@ def show_login_page(db):
                 else:
                     st.error("Demo account unavailable. Please check seed data.")
             st.caption("User: `admin_b` | Pass: `password123`")
+
+        st.markdown("---")
+        st.markdown("##### 🏛️ Super Admin")
+        if st.button("Super Admin\n(Government / Network Admin)", use_container_width=True):
+            auth = AuthService.authenticate(db, "gov_admin", "password123")
+            if auth:
+                _establish_session(auth_result=auth)
+                st.rerun()
+            else:
+                st.error("Demo account unavailable. Please check seed data.")
+        st.caption("User: `gov_admin` | Pass: `password123`")
 
 
 # ==============================================================================
@@ -2498,6 +2513,369 @@ def show_patient_portal_page(db):
 
 
 # ==============================================================================
+# SECTION 6: GOVERNMENT / SUPER ADMIN WORKFLOW
+# Dashboard | Hospitals | Hospital Details | Network Overview | Logout
+# ==============================================================================
+
+def render_government_admin_sidebar() -> str:
+    """Render government admin navigation sidebar."""
+    st.sidebar.markdown("### MED-SETU")
+    st.sidebar.markdown("**🏛️ Super Admin / Government**")
+    st.sidebar.markdown("---")
+
+    nav_options = ["🏠 Dashboard", "🏥 Hospitals", "📋 Hospital Details", "🌐 Network Overview"]
+    current_nav_index = 0
+    clean_current = st.session_state.government_admin_nav
+    for i, opt in enumerate(nav_options):
+        if clean_current in opt:
+            current_nav_index = i
+            break
+
+    nav = st.sidebar.radio(
+        "Super Admin Navigation",
+        nav_options,
+        index=current_nav_index,
+        label_visibility="collapsed"
+    )
+    if "Dashboard" in nav:
+        clean_nav = "Dashboard"
+    elif "Hospital Details" in nav:
+        clean_nav = "Hospital Details"
+    elif "Hospital" in nav:
+        clean_nav = "Hospitals"
+    elif "Network" in nav:
+        clean_nav = "Network Overview"
+    else:
+        clean_nav = "Dashboard"
+
+    st.session_state.government_admin_nav = clean_nav
+
+    if st.sidebar.button("🚪 Logout", use_container_width=True, key="gov_logout_btn"):
+        AuthSessionService.logout()
+        st.rerun()
+
+    return clean_nav
+
+
+def show_government_admin_dashboard(db):
+    """Government Admin: Global facility network dashboard."""
+    nav = render_government_admin_sidebar()
+
+    if nav == "Dashboard":
+        show_ga_overview(db)
+    elif nav == "Hospitals":
+        show_ga_hospitals(db)
+    elif nav == "Hospital Details":
+        show_ga_hospital_details(db)
+    elif nav == "Network Overview":
+        show_ga_network_overview(db)
+    else:
+        show_ga_overview(db)
+
+
+def show_ga_overview(db):
+    """Super Admin: Global network KPI dashboard."""
+    st.markdown("## 🏛️ Super Admin Dashboard")
+    _render_workflow_trail(GOVERNMENT_ADMIN_WORKFLOW, "dashboard")
+
+    facilities = ManagementService.get_all_facilities(db)
+    total_fac = len(facilities)
+    active_fac = sum(1 for f in facilities if f["is_active"])
+    inactive_fac = total_fac - active_fac
+
+    total_departments = db.query(Department).count()
+    total_doctors = db.query(Doctor).filter(Doctor.is_available == True).count()
+    total_receptionists = db.query(User).filter(
+        User.role == UserRole.RECEPTIONIST, User.is_active == True
+    ).count()
+    total_hospital_admins = db.query(User).filter(
+        User.role == UserRole.HOSPITAL_ADMIN, User.is_active == True
+    ).count()
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Total Hospitals", total_fac)
+    with c2:
+        st.metric("Active Hospitals", active_fac)
+    with c3:
+        st.metric("Inactive Hospitals", inactive_fac)
+    with c4:
+        st.metric("Departments", total_departments)
+
+    c5, c6, c7, c8 = st.columns(4)
+    with c5:
+        st.metric("Total Doctors", total_doctors)
+    with c6:
+        st.metric("Receptionists", total_receptionists)
+    with c7:
+        st.metric("Hospital Admins", total_hospital_admins)
+    with c8:
+        st.metric("Total Facilities", total_fac)
+
+    st.markdown("---")
+
+    c_btn1, c_btn2, c_btn3 = st.columns(3)
+    with c_btn1:
+        if st.button("🏥 Manage Hospitals", use_container_width=True):
+            st.session_state.government_admin_nav = "Hospitals"
+            st.rerun()
+    with c_btn2:
+        if st.button("📋 Hospital Details", use_container_width=True):
+            st.session_state.government_admin_nav = "Hospital Details"
+            st.rerun()
+    with c_btn3:
+        if st.button("🌐 Network Overview", use_container_width=True):
+            st.session_state.government_admin_nav = "Network Overview"
+            st.rerun()
+
+    st.markdown("### 🏥 Facility Summary")
+    if facilities:
+        fac_rows = []
+        for f in facilities:
+            fac_rows.append({
+                "Name": f["name"],
+                "Type": f["facility_type"],
+                "District": f["district"],
+                "Doctors": f["doctor_count"],
+                "Status": "Active" if f["is_active"] else "Inactive",
+            })
+        st.dataframe(fac_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No facilities registered yet.")
+
+
+def show_ga_hospitals(db):
+    """Super Admin: Hospital directory with search, filter, and CRUD."""
+    st.markdown("## 🏥 Hospital Directory")
+    _render_workflow_trail(GOVERNMENT_ADMIN_WORKFLOW, "hospitals")
+
+    user_data = st.session_state.user_data or {}
+    facilities = ManagementService.get_all_facilities(db)
+
+    st.markdown(f"**Total Facilities:** {len(facilities)}")
+    st.markdown("---")
+
+    t_list, t_add = st.tabs(["📋 Hospital Directory", "➕ Add New Hospital"])
+
+    with t_list:
+        search_q = st.text_input("🔍 Search hospitals by name, type, or district", placeholder="Type to filter...", key="ga_hosp_search")
+        status_filter = st.radio("Status", ["All", "Active", "Inactive"], horizontal=True, key="ga_hosp_status")
+
+        filtered = facilities
+        if search_q:
+            q = search_q.lower()
+            filtered = [f for f in filtered if q in f["name"].lower() or q in f["facility_type"].lower() or q in f["district"].lower()]
+        if status_filter == "Active":
+            filtered = [f for f in filtered if f["is_active"]]
+        elif status_filter == "Inactive":
+            filtered = [f for f in filtered if not f["is_active"]]
+
+        if filtered:
+            for f in filtered:
+                status_badge = "🟢 Active" if f["is_active"] else "🔴 Inactive"
+                with st.container():
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    with col1:
+                        st.markdown(f"**{f['name']}**")
+                        st.caption(f"{f['facility_type']} | 📍 {f['district']} | 👨‍⚕️ {f['doctor_count']} doctors | {status_badge}")
+                    with col2:
+                        if st.button("View", key=f"ga_view_{f['id']}", use_container_width=True):
+                            st.session_state.ga_selected_facility_id = f["id"]
+                            st.session_state.government_admin_nav = "Hospital Details"
+                            st.rerun()
+                    with col3:
+                        if f["is_active"]:
+                            if st.button("Deactivate", key=f"ga_deact_{f['id']}", use_container_width=True):
+                                result = ManagementService.deactivate_facility(db, f["id"], "government_admin", user_data)
+                                if result.get("success"):
+                                    st.success(result["message"])
+                                    st.rerun()
+                                else:
+                                    st.error(result.get("error", "Failed."))
+                        else:
+                            if st.button("Activate", key=f"ga_act_{f['id']}", use_container_width=True):
+                                result = ManagementService.reactivate_facility(db, f["id"], "government_admin", user_data)
+                                if result.get("success"):
+                                    st.success(result["message"])
+                                    st.rerun()
+                                else:
+                                    st.error(result.get("error", "Failed."))
+                    st.markdown("---")
+        else:
+            st.info("No hospitals match your filters.")
+
+    with t_add:
+        st.markdown("### Add New Hospital")
+        with st.form("add_hospital_form", clear_on_submit=True):
+            new_name = st.text_input("Hospital Name*", placeholder="e.g. Primary Health Centre Navi Mumbai")
+            new_type = st.selectbox("Facility Type", ["Hospital", "Community Health Centre", "Primary Health Centre", "District Hospital", "Specialty Clinic", "Other"])
+            new_district = st.text_input("District", placeholder="e.g. Thane")
+            new_address = st.text_area("Address", placeholder="Full address")
+            new_phone = st.text_input("Phone", placeholder="Contact number")
+            submitted = st.form_submit_button("Create Hospital", use_container_width=True)
+
+            if submitted:
+                if not new_name.strip():
+                    st.error("Hospital name is required.")
+                else:
+                    result = ManagementService.create_facility(
+                        db, user_data, new_name, new_type, new_district, new_address, new_phone
+                    )
+                    if result.get("success"):
+                        st.success(result["message"])
+                        st.rerun()
+                    else:
+                        st.error(result.get("error", "Failed to create hospital."))
+
+
+def show_ga_hospital_details(db):
+    """Super Admin: View and edit a specific hospital."""
+    st.markdown("## 📋 Hospital Details")
+    _render_workflow_trail(GOVERNMENT_ADMIN_WORKFLOW, "hospital_details")
+
+    user_data = st.session_state.user_data or {}
+    facilities = ManagementService.get_all_facilities(db)
+    if not facilities:
+        st.info("No hospitals in the system.")
+        return
+
+    fac_options = {f["name"]: f["id"] for f in facilities}
+    selected_name = st.selectbox("Select Hospital", list(fac_options.keys()), key="ga_hosp_detail_select")
+    fac_id = fac_options[selected_name]
+
+    profile = ManagementService.get_facility_profile(db, fac_id)
+    if not profile:
+        st.error("Hospital not found.")
+        return
+
+    st.markdown("---")
+    st.markdown(f"### {profile['name']}")
+    status = "🟢 Active" if profile["is_active"] else "🔴 Inactive"
+    st.caption(f"{profile.get('facility_type', 'Hospital')} | 📍 {profile.get('district', 'N/A')} | {status}")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Departments", profile.get("department_count", 0))
+    with c2:
+        st.metric("Doctors", profile.get("doctor_count", 0))
+    with c3:
+        st.metric("Total Visits", profile.get("visit_count", 0))
+    with c4:
+        staff_count = db.query(User).filter(
+            User.facility_id == fac_id, User.is_active == True
+        ).count()
+        st.metric("Staff", staff_count)
+
+    departments = ManagementService.get_facility_departments(db, fac_id)
+    if departments:
+        st.markdown("#### Departments")
+        dept_rows = [{"Name": d["name"], "Doctors": d["doctor_count"]} for d in departments]
+        st.dataframe(dept_rows, use_container_width=True, hide_index=True)
+
+    t_edit, t_status = st.tabs(["✏️ Edit Profile", "⚡ Status"])
+
+    with t_edit:
+        with st.form("edit_hospital_detail_form"):
+            edit_name = st.text_input("Hospital Name", value=profile["name"])
+            edit_type = st.text_input("Facility Type", value=profile.get("facility_type", ""))
+            edit_district = st.text_input("District", value=profile.get("district", ""))
+            edit_address = st.text_area("Address", value=profile.get("address", ""))
+            edit_phone = st.text_input("Phone", value=profile.get("phone", ""))
+            if st.form_submit_button("Save Changes", use_container_width=True):
+                result = ManagementService.edit_facility_by_id(
+                    db, user_data, fac_id,
+                    name=edit_name, facility_type=edit_type,
+                    district=edit_district, address=edit_address, phone=edit_phone,
+                )
+                if result.get("success"):
+                    st.success(result["message"])
+                    st.rerun()
+                else:
+                    st.error(result.get("error", "Failed."))
+
+    with t_status:
+        if profile["is_active"]:
+            if st.button("Deactivate Hospital", use_container_width=True, type="secondary"):
+                result = ManagementService.deactivate_facility(db, fac_id, "government_admin", user_data)
+                if result.get("success"):
+                    st.success(result["message"])
+                    st.rerun()
+                else:
+                    st.error(result.get("error", "Failed."))
+            st.caption("Deactivating prevents new operations but preserves all historical data.")
+        else:
+            if st.button("Activate Hospital", use_container_width=True, type="primary"):
+                result = ManagementService.reactivate_facility(db, fac_id, "government_admin", user_data)
+                if result.get("success"):
+                    st.success(result["message"])
+                    st.rerun()
+                else:
+                    st.error(result.get("error", "Failed."))
+
+
+def show_ga_network_overview(db):
+    """Super Admin: Global network statistics and distribution."""
+    st.markdown("## 🌐 Network Overview")
+    _render_workflow_trail(GOVERNMENT_ADMIN_WORKFLOW, "network")
+
+    facilities = ManagementService.get_all_facilities(db)
+    total_fac = len(facilities)
+    active_fac = sum(1 for f in facilities if f["is_active"])
+    inactive_fac = total_fac - active_fac
+
+    st.markdown("### Facility Status")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Total Facilities", total_fac)
+    with c2:
+        st.metric("Active", active_fac)
+    with c3:
+        st.metric("Inactive", inactive_fac)
+
+    st.markdown("---")
+    st.markdown("### Staff Distribution by Facility")
+
+    fac_rows = []
+    for f in facilities:
+        fid = f["id"]
+        doc_count = db.query(Doctor).filter(Doctor.facility_id == fid, Doctor.is_available == True).count()
+        rec_count = db.query(User).filter(
+            User.facility_id == fid, User.role == UserRole.RECEPTIONIST, User.is_active == True
+        ).count()
+        admin_count = db.query(User).filter(
+            User.facility_id == fid, User.role == UserRole.HOSPITAL_ADMIN, User.is_active == True
+        ).count()
+        dept_count = db.query(Department).filter(Department.facility_id == fid).count()
+        fac_rows.append({
+            "Facility": f["name"],
+            "District": f["district"],
+            "Status": "Active" if f["is_active"] else "Inactive",
+            "Departments": dept_count,
+            "Doctors": doc_count,
+            "Receptionists": rec_count,
+            "Hospital Admins": admin_count,
+        })
+
+    if fac_rows:
+        st.dataframe(fac_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No facilities in the network.")
+
+    st.markdown("---")
+    st.markdown("### Department Distribution")
+    all_depts = db.query(Department).all()
+    if all_depts:
+        dept_fac_map = {}
+        for d in all_depts:
+            fac_name = d.facility.name if d.facility else "Unknown"
+            dept_fac_map.setdefault(fac_name, []).append(d.name)
+        for fac_name, dept_names in dept_fac_map.items():
+            st.markdown(f"**{fac_name}:** {', '.join(dept_names)}")
+    else:
+        st.info("No departments configured.")
+
+
+# ==============================================================================
 # MAIN APPLICATION ROUTER
 # ==============================================================================
 
@@ -2529,6 +2907,8 @@ def main():
             _safe_render("Patient Portal", show_patient_portal_page, db)
         elif role == "hospital_admin":
             _safe_render("Hospital Admin", show_hospital_admin_dashboard, db)
+        elif role == "government_admin":
+            _safe_render("Super Admin", show_government_admin_dashboard, db)
         else:
             show_login_page(db)
     finally:

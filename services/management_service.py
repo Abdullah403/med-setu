@@ -217,6 +217,86 @@ class ManagementService:
         ]
 
     @staticmethod
+    def create_facility(
+        db: Session,
+        user_data: dict,
+        name: str,
+        facility_type: str = "Hospital",
+        district: str = "",
+        address: str = "",
+        phone: str = "",
+    ) -> Dict[str, Any]:
+        """Create a new facility. Requires global (super admin) role."""
+        if not is_global_role(user_data):
+            return denial("Unauthorized: Only Super Admin can create facilities.")
+
+        name = name.strip()
+        if not name:
+            return denial("Facility name is required.")
+
+        existing = db.query(Facility).filter(Facility.name == name).first()
+        if existing:
+            return denial(f"Facility '{name}' already exists.")
+
+        fac = Facility(
+            name=name,
+            facility_type=facility_type.strip() if facility_type else "Hospital",
+            district=district.strip(),
+            address=address.strip(),
+            phone=phone.strip(),
+            is_active=True,
+        )
+        db.add(fac)
+        db.commit()
+        db.refresh(fac)
+        return {
+            "success": True,
+            "message": f"Facility '{fac.name}' created successfully.",
+            "facility_id": fac.id,
+        }
+
+    @staticmethod
+    def edit_facility_by_id(
+        db: Session,
+        user_data: dict,
+        facility_id: int,
+        name: str = None,
+        facility_type: str = None,
+        district: str = None,
+        address: str = None,
+        phone: str = None,
+    ) -> Dict[str, Any]:
+        """Edit any facility by ID. Requires global (super admin) role."""
+        if not is_global_role(user_data):
+            return denial("Unauthorized: Only Super Admin can edit facilities.")
+
+        fac = db.query(Facility).filter(Facility.id == facility_id).first()
+        if not fac:
+            return {"success": False, "error": "Facility not found."}
+
+        if name is not None:
+            name = name.strip()
+            if not name:
+                return denial("Facility name cannot be blank.")
+            existing = db.query(Facility).filter(
+                Facility.name == name, Facility.id != facility_id
+            ).first()
+            if existing:
+                return denial(f"Facility '{name}' already exists.")
+            fac.name = name
+        if facility_type is not None:
+            fac.facility_type = facility_type.strip()
+        if district is not None:
+            fac.district = district.strip()
+        if address is not None:
+            fac.address = address.strip()
+        if phone is not None:
+            fac.phone = phone.strip()
+
+        db.commit()
+        return {"success": True, "message": f"Facility '{fac.name}' updated."}
+
+    @staticmethod
     def get_facility_profile(db: Session, facility_id: int) -> Dict[str, Any]:
         """Retrieve a single facility's profile information."""
         fac = db.query(Facility).filter(Facility.id == facility_id).first()

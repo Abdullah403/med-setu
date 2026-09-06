@@ -309,6 +309,9 @@ def _set_nav_defaults(role: str) -> None:
     elif normalize_role(role) == "hospital_admin":
         if "hospital_admin_nav" not in st.session_state:
             st.session_state.hospital_admin_nav = "Dashboard"
+    elif normalize_role(role) == "government_admin":
+        if "government_admin_nav" not in st.session_state:
+            st.session_state.government_admin_nav = "Dashboard"
 
 
 def _b64encode(data: bytes) -> str:

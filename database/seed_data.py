@@ -391,6 +391,19 @@ def _ensure_admin_accounts(db: Session):
             )
             db.add(admin_b)
 
+    # Government / Super Admin account (global, no facility)
+    existing_gov = db.query(User).filter(User.username == "gov_admin").first()
+    if not existing_gov:
+        gov_admin = User(
+            username="gov_admin",
+            password_hash=hash_password("password123"),
+            role=UserRole.GOVERNMENT_ADMIN,
+            full_name="Super Admin",
+            facility_id=None,
+            is_active=True,
+        )
+        db.add(gov_admin)
+
 
 if __name__ == "__main__":
     print("Initializing database...")

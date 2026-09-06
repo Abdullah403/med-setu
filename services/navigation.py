@@ -31,10 +31,18 @@ HOSPITAL_ADMIN_WORKFLOW = [
     ("Hospital Profile", "profile"),
 ]
 
+GOVERNMENT_ADMIN_WORKFLOW = [
+    ("Dashboard", "dashboard"),
+    ("Hospitals", "hospitals"),
+    ("Hospital Details", "hospital_details"),
+    ("Network Overview", "network"),
+]
+
 WORKFLOWS = {
     "doctor": DOCTOR_WORKFLOW,
     "receptionist": RECEPTIONIST_WORKFLOW,
     "hospital_admin": HOSPITAL_ADMIN_WORKFLOW,
+    "government_admin": GOVERNMENT_ADMIN_WORKFLOW,
 }
 
 
